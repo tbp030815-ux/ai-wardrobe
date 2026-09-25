@@ -1,6 +1,6 @@
 # AI 智能衣橱 — 技术方案总结
 
-> 最后更新：2025-09-22
+> 最后更新：2026-09-25（阶段三已完成）
 
 ---
 
@@ -44,16 +44,17 @@ ai-cloth/
 │   ├── api/                  # REST API 端点
 │   │   ├── upload.py         # 上传衣物 / 模特照片
 │   │   ├── wardrobe.py       # 衣柜 CRUD
-│   │   ├── recommendation.py # 穿搭推荐
-│   │   └── tryon.py          # AI 试穿
+│   │   ├── recommendation.py # 穿搭推荐 ✅ 已实现
+│   │   └── tryon.py          # AI 试穿（阶段四）
 │   ├── services/             # 业务逻辑层
-│   │   ├── seedream_client.py    # Seedream API 统一客户端
+│   │   ├── seedream_client.py    # Seedream API 统一客户端（识图 + 文本对话）
 │   │   ├── background_removal.py # 抠图 (rembg)
-│   │   ├── image_analysis.py     # 图像分析 (seedream vision)
-│   │   ├── recommendation_engine.py # 推荐逻辑
-│   │   └── tryon_service.py      # 试穿逻辑
+│   │   ├── weather.py            # Open-Meteo 天气 ✅ 已实现
+│   │   ├── recommendation.py     # 推荐逻辑 ✅ 已实现
+│   │   └── tryon_service.py      # 试穿逻辑（阶段四）
 │   ├── storage/              # 数据层
-│   │   └── database.py       # SQLite 连接 & 模型定义
+│   │   ├── database.py       # SQLite 连接 & 模型定义
+│   │   └── clothes_store.py  # 衣物数据访问
 │   ├── uploads/              # 图片存储
 │   └── requirements.txt
 ├── frontend/                 # React + Vite 前端
@@ -153,7 +154,10 @@ CREATE TABLE outfits (
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | /api/recommendation?location=上海&mode=commute | 生成今日推荐 |
+| GET | /api/recommendation?location=上海&occasion=通勤 | 生成今日推荐 |
+
+> 注：实际实现用 `occasion`（中文场合名）替代了原设计的 `mode`（英文枚举），取值：通勤/休闲/运动/约会/正式。
+> 错误码：400 城市名为空、404 城市查不到、503 天气服务不可用；衣柜为空与 LLM 失败均返回 200 + 降级结果。
 
 ### 5.4 AI 试穿
 
@@ -255,29 +259,33 @@ async def remove_background(image_bytes: bytes) -> bytes:
 - 上传人像照，返回透明底 PNG
 - 调用 Seedream vision API，返回结构化 JSON
 
-### 阶段三：穿搭推荐引擎（Day 6-8）
+### 阶段三：穿搭推荐引擎（Day 6-8）✅ 已完成
 
 **目标**：根据天气 + 库存生成搭配建议
 
 ```python
-# 后端 services/recommendation_engine.py
+# 后端 services/weather.py —— Open-Meteo 免费天气，无需 API Key，支持中文城市名
+GET https://geocoding-api.open-meteo.com/v1/search?name=上海&language=zh&count=1
+GET https://api.open-meteo.com/v1/forecast?latitude=..&longitude=..
+    &current=temperature_2m,apparent_temperature,weather_code
+    &daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max
 
-# 1. 接入 Open-Meteo 免费天气接口
-GET https://geocoding-api.open-meteo.com/v1/search?name=Shanghai
-GET https://api.open-meteo.com/v1/forecast?latitude=31.2&longitude=121.5&hourly=temperature_2m
-
-# 2. Seedream LLM 生成推荐
-prompt = f"""
-当前天气：{temp}°C, {weather_desc}
-用户衣橱里有以下衣服：{wardrobe_list}
-请推荐一套搭配（上装+下装+鞋履），并说明理由
-"""
-response = await call_seedream("recommend", prompt=prompt)
+# 后端 services/recommendation.py —— 规则筛选 → LLM 精选 → 校验 → 降级
+#   1. build_candidates：按季节带筛候选，按角色（上衣/下装/鞋/配饰）分组，
+#      季节+场合+温度打分，每角色取 Top-4
+#   2. call_chat_api：把天气 + 场合 + 候选清单（含 id）交给 LLM，只返回
+#      {"clothes_ids": [...], "reason": "..."}
+#   3. validate_llm_result：越界 id 丢弃、重复去重、整体非法则降级到纯规则
 ```
 
 **验收标准**：
-- 返回包含上装、下装、鞋履的完整搭配
-- 附带推荐理由
+- ✅ 返回包含上装、下装、鞋履的完整搭配（缺角色时明确提示缺什么）
+- ✅ 附带推荐理由（LLM 生成或规则模板）
+
+**与原设计的差异**：
+- 实际拆成 `services/weather.py` + `services/recommendation.py` 两个文件（原计划只写一个 `recommendation_engine.py`）
+- 新增 `call_chat_api` 到 `seedream_client.py`（原设计想用 `call_seedream` 统一入口，但视觉与文本对话的 payload 差异明显，分开更清晰）
+- 推荐结果**不落库**（`outfits` 表留给阶段四试穿，需要 model_id）
 
 ### 阶段四：AI 试穿功能（Day 9-14）
 

@@ -13,6 +13,7 @@ from services.seedream_client import (
     ARK_BASE_URL,
     CLOTHES_PROMPT,
     analyze_clothes,
+    call_chat_api,
     call_vision_api,
     guess_mime,
     parse_semantics_json,
@@ -132,3 +133,33 @@ async def test_analyze_clothes_allows_custom_base_url(httpx_mock):
     )
 
     assert str(httpx_mock.get_request().url) == "https://example.com/api/v3/chat/completions"
+
+
+# ---------- call_chat_api（阶段三：推荐用的纯文本对话） ----------
+
+async def test_call_chat_api_sends_text_only_content(httpx_mock):
+    httpx_mock.add_response(json={"choices": [{"message": {"content": "推荐结果"}}]})
+
+    text = await call_chat_api(
+        "请推荐一套穿搭", api_key="test-key", model="doubao-chat-test"
+    )
+
+    assert text == "推荐结果"
+
+    request = httpx_mock.get_request()
+    assert str(request.url) == f"{ARK_BASE_URL}/chat/completions"
+    assert request.headers["Authorization"] == "Bearer test-key"
+
+    body = json.loads(request.content)
+    assert body["model"] == "doubao-chat-test"
+    content = body["messages"][0]["content"]
+    assert content == [{"type": "text", "text": "请推荐一套穿搭"}]
+    # 纯文本对话不应带任何 image_url
+    assert not any(p.get("type") == "image_url" for p in content)
+
+
+async def test_call_chat_api_raises_on_http_error(httpx_mock):
+    httpx_mock.add_response(status_code=401, json={"error": {"message": "invalid key"}})
+
+    with pytest.raises(ValueError):
+        await call_chat_api("prompt", api_key="bad-key", model="m")

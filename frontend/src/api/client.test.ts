@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Clothes } from '../types'
-import { fetchWardrobe, uploadClothes } from './client'
+import type { Clothes, Recommendation } from '../types'
+import { fetchRecommendation, fetchWardrobe, uploadClothes } from './client'
 
 /** 替换全局 fetch，返回 spy 以便断言请求参数 */
 function stubFetch(impl: (url: string, init?: RequestInit) => Promise<Response>) {
@@ -91,5 +91,45 @@ describe('uploadClothes', () => {
     await expect(
       uploadClothes(new File(['x'], 'a.jpg', { type: 'image/jpeg' })),
     ).rejects.toThrow('无法连接后端服务')
+  })
+})
+
+describe('fetchRecommendation', () => {
+  const sampleRecommendation: Recommendation = {
+    weather: {
+      city: '上海',
+      temperature: 28.8,
+      apparent_temperature: 30.8,
+      description: '晴间多云',
+      temp_max: 31.0,
+      temp_min: 23.5,
+      precipitation_probability: 14,
+      weather_code: 1,
+      reference_temperature: 31,
+    },
+    occasion: '通勤',
+    source: 'llm',
+    reason: '清爽通勤装',
+    items: [],
+    gaps: [],
+  }
+
+  it('GETs /api/recommendation with encoded location and occasion params', async () => {
+    const spy = stubFetch(async () => jsonResponse(sampleRecommendation))
+
+    const result = await fetchRecommendation('上海', '通勤')
+
+    expect(result).toEqual(sampleRecommendation)
+    const url = new URL(spy.mock.calls[0][0], 'http://localhost')
+    expect(url.pathname).toBe('/api/recommendation')
+    expect(url.searchParams.get('location')).toBe('上海')
+    expect(url.searchParams.get('occasion')).toBe('通勤')
+    expect(spy.mock.calls[0][1]?.method).toBeUndefined() // 默认 GET，不是 POST
+  })
+
+  it('surfaces the server message when the city is not found', async () => {
+    stubFetch(async () => jsonResponse({ detail: '没有找到城市「火星」，请换个说法试试' }, 404))
+
+    await expect(fetchRecommendation('火星', '休闲')).rejects.toThrow('没有找到城市「火星」')
   })
 })

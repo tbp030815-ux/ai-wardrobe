@@ -120,3 +120,36 @@ async def analyze_clothes(
         image_bytes, CLOTHES_PROMPT, api_key=api_key, model=model, base_url=base_url
     )
     return parse_semantics_json(text)
+
+
+CHAT_TIMEOUT = 60.0  # Seed 2.1 是思考型模型，完整推荐 prompt 实测超过 30s，与识图调用对齐
+
+
+async def call_chat_api(
+    prompt: str,
+    *,
+    api_key: str,
+    model: str,
+    base_url: str = ARK_BASE_URL,
+) -> str:
+    """调用火山方舟文本对话接口（无图片），返回模型文本输出"""
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+    }
+
+    async with httpx.AsyncClient(timeout=CHAT_TIMEOUT) as client:
+        response = await client.post(
+            f"{base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+
+    if response.status_code >= 400:
+        raise ValueError(f"推荐接口调用失败（{response.status_code}）：{response.text[:300]}")
+
+    data = response.json()
+    return data["choices"][0]["message"]["content"]

@@ -51,10 +51,13 @@ backend/
 ├── config.py                  # Settings（读 .env）
 ├── api/
 │   ├── upload.py              # POST /api/upload（抠图 → 识别 → 入库）
-│   └── wardrobe.py            # GET /api/wardrobe, GET /api/clothes/{id}
+│   ├── wardrobe.py            # GET /api/wardrobe, GET /api/clothes/{id}
+│   └── recommendation.py      # GET /api/recommendation（天气 + 穿搭推荐）
 ├── services/
 │   ├── background_removal.py  # rembg 本地抠图
-│   └── seedream_client.py     # 火山方舟 API 客户端
+│   ├── seedream_client.py     # 火山方舟 API 客户端（识图 + 文本对话）
+│   ├── weather.py             # Open-Meteo 天气（免 Key）
+│   └── recommendation.py      # 推荐引擎：规则筛选 → LLM 精选 → 降级
 ├── storage/
 │   ├── database.py            # SQLite 连接 & 建表
 │   └── clothes_store.py       # 衣物数据访问
@@ -66,7 +69,7 @@ frontend/
 ├── src/App.tsx                # 路由框架：/ (今日推荐) /wardrobe (衣柜) /tryon (试穿)
 ├── src/types.ts               # Clothes 等接口定义
 ├── src/api/client.ts          # fetch 封装
-├── src/pages/                 # Home / Wardrobe / TryOn（Wardrobe 已对接后端）
+├── src/pages/                 # Home / Wardrobe / TryOn（Home、Wardrobe 已对接后端）
 ├── src/components/            # WardrobeGrid
 └── vite.config.ts             # 代理 /api + /uploads
 PLAN.md                        # 完整技术方案（开发计划、API 设计、数据库表）
@@ -103,9 +106,29 @@ PLAN.md                        # 完整技术方案（开发计划、API 设计�
 
 - Docker Compose 部署待实现（计划阶段五）
 
+## 穿搭推荐接口（阶段三）
+
+```
+GET /api/recommendation?location=上海&occasion=休闲&user_id=1
+```
+
+| 情况 | 行为 |
+|---|---|
+| 正常 | 200，`items` 带 `role`（上衣/下装/鞋/配饰），`source` 为 `llm` 或 `rule` |
+| 城市名为空 | 400 |
+| 城市查不到 | 404（注意「火星」这类词在广东韶关确实是地名，不会 404） |
+| 天气服务不可用 | 503（不做"无天气推荐"） |
+| 衣柜为空 / LLM 失败 | **200**，`items: []` + `gaps` 提示 / `source: "rule"` 降级 |
+
+- 架构：规则筛选（季节 + 场合 + 温度打分，每角色 Top-4）→ LLM 精选 → 校验 id → 任何异常降级到纯规则
+- **无 `SEEDREAM_API_KEY` 时根本不调用 LLM**，衣物语义字段为 null 也能推荐（只降权不剔除）
+- `occasion` 取值：通勤 / 休闲 / 运动 / 约会 / 正式，非法值回退「休闲」
+- 天气来自 Open-Meteo（免费无 Key），中文城市名直接传 `name=` 参数
+
 ## 当前进度
 
 - ✅ 阶段一：前后端骨架跑通
 - ✅ 阶段二：抠图 + 衣物识别 + 前端衣柜页对接，真实 API 联调通过
-- ⏳ 阶段三：穿搭推荐（天气 + 衣橱生成搭配建议）
+- ✅ 阶段三：穿搭推荐（Open-Meteo 天气 + 规则/LLM 混合推荐 + 前端今日推荐页），后端 100 / 前端 25 测试全绿，真实端到端联调通过
+- ⏳ 阶段四：AI 试穿（需开通图像生成模型，推荐 `doubao-seedream-5-0-pro-260628`）
 - 完整路线图见 `PLAN.md`

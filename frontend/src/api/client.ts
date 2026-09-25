@@ -1,4 +1,4 @@
-import type { Clothes } from '../types'
+import type { Clothes, Recommendation } from '../types'
 
 const NETWORK_ERROR_MESSAGE = '无法连接后端服务，请确认后端已启动'
 
@@ -32,4 +32,13 @@ export async function uploadClothes(file: File): Promise<Clothes> {
   const form = new FormData()
   form.append('file', file)
   return request<Clothes>('/api/upload', { method: 'POST', body: form })
+}
+
+export async function fetchRecommendation(
+  location: string,
+  occasion: string,
+): Promise<Recommendation> {
+  // URLSearchParams 自动做百分号编码，中文城市名不用手动 encodeURIComponent
+  const params = new URLSearchParams({ location, occasion })
+  return request<Recommendation>(`/api/recommendation?${params}`)
 }
