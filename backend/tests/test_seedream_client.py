@@ -6,10 +6,12 @@ Seedream（火山方舟）客户端测试（TDD 循环 3）
 import base64
 import io
 import json
+import threading
 
 import pytest
 from PIL import Image
 
+from services import seedream_client
 from services.seedream_client import (
     ARK_BASE_URL,
     CLOTHES_PROMPT,
@@ -292,6 +294,26 @@ async def test_call_image_api_normalizes_oversized_reference(httpx_mock):
     sent = json.loads(httpx_mock.get_request().content)["image"]
     image = Image.open(io.BytesIO(base64.b64decode(sent.split(",", 1)[1])))
     assert image.width * image.height <= MAX_PIXELS
+
+
+async def test_call_image_api_normalizes_off_the_event_loop(httpx_mock, monkeypatch):
+    """规范化是纯 CPU：4800 万像素手机照解码 + LANCZOS 缩放要 1-2 秒，
+    同步跑会冻住单 worker 上所有并发请求"""
+    httpx_mock.add_response(json=make_b64_response(make_jpeg_bytes()))
+
+    loop_thread = threading.current_thread()
+    seen: list[threading.Thread] = []
+    real = seedream_client.prepare_reference_image
+
+    def record(image_bytes):
+        seen.append(threading.current_thread())
+        return real(image_bytes)
+
+    monkeypatch.setattr("services.seedream_client.prepare_reference_image", record)
+
+    await call_image_api("试穿", [make_png_bytes()], api_key="k", model="m")
+
+    assert seen and all(thread is not loop_thread for thread in seen)
 
 
 async def test_call_image_api_raises_value_error_without_b64_payload(httpx_mock):

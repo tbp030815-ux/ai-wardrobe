@@ -5,6 +5,7 @@
 - 视觉理解（衣物识别）：chat/completions 接口
 - 图像生成/编辑（AI 试穿）：images/generations 接口
 """
+import asyncio
 import base64
 import io
 import json
@@ -95,6 +96,18 @@ def prepare_reference_image(image_bytes: bytes) -> bytes:
     buf = io.BytesIO()
     resized.save(buf, format="JPEG", quality=88)
     return buf.getvalue()
+
+
+def _encode_reference_images(images: list[bytes]) -> list[str]:
+    """规范化 + base64 编码成 data URI。
+
+    纯 CPU（大图解码 + 缩放要 1-2 秒），调用方必须用 `asyncio.to_thread` 挪出事件循环，
+    否则会冻住单 worker 上所有并发请求。
+    """
+    return [
+        f"data:{guess_mime(prepared)};base64,{base64.b64encode(prepared).decode()}"
+        for prepared in map(prepare_reference_image, images)
+    ]
 
 
 async def call_vision_api(
@@ -203,12 +216,7 @@ async def call_image_api(
     `image` 字段是多态的（上游契约）：单张传 JSON 字符串，多张传数组。
     用 b64_json 而不是 URL —— 签名链接 24h 过期，落盘前失效就是这个故障模式的来源。
     """
-    data_uris = []
-    for image in images:
-        prepared = prepare_reference_image(image)
-        data_uris.append(
-            f"data:{guess_mime(prepared)};base64,{base64.b64encode(prepared).decode()}"
-        )
+    data_uris = await asyncio.to_thread(_encode_reference_images, images)
 
     payload = {
         "model": model,
