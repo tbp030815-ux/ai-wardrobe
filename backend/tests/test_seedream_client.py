@@ -3,6 +3,7 @@ Seedream（火山方舟）客户端测试（TDD 循环 3）
 
 外部 HTTP 调用用 pytest-httpx 拦截，测试的是我们代码的请求构造与响应解析逻辑。
 """
+import base64
 import io
 import json
 
@@ -12,11 +13,16 @@ from PIL import Image
 from services.seedream_client import (
     ARK_BASE_URL,
     CLOTHES_PROMPT,
+    IMAGE_TIMEOUT,
+    MAX_PIXELS,
+    UpstreamError,
     analyze_clothes,
     call_chat_api,
+    call_image_api,
     call_vision_api,
     guess_mime,
     parse_semantics_json,
+    prepare_reference_image,
 )
 
 
@@ -163,3 +169,152 @@ async def test_call_chat_api_raises_on_http_error(httpx_mock):
 
     with pytest.raises(ValueError):
         await call_chat_api("prompt", api_key="bad-key", model="m")
+
+
+# ---------- prepare_reference_image（阶段四：把参考图规范到 API 契约内） ----------
+
+def make_image_bytes(width: int, height: int, fmt: str = "PNG") -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), (120, 120, 120)).save(buf, format=fmt)
+    return buf.getvalue()
+
+
+def test_image_timeout_is_generous_enough_for_2k_generation():
+    """契约常量：2K 生成实测远超 60s，超时算错会导致「付了钱但拿不到图」"""
+    assert IMAGE_TIMEOUT.read >= 180.0
+
+
+def test_prepare_returns_in_range_image_untouched():
+    """区间内原样返回 —— 不重编码，不损失画质，不改格式"""
+    data = make_image_bytes(1000, 1000)  # 1,000,000 px
+
+    assert prepare_reference_image(data) == data
+
+
+def test_prepare_accepts_image_below_minimum_without_upscaling():
+    """实测上游并未强制 921,600 最小像素，放大只引入插值伪影（循环 F0 结论）"""
+    data = make_image_bytes(10, 10)
+
+    result = prepare_reference_image(data)
+
+    assert Image.open(io.BytesIO(result)).size == (10, 10)
+
+
+def test_prepare_downscales_oversized_image_below_upper_bound():
+    data = make_image_bytes(5000, 3500)  # 17,500,000 px > MAX_PIXELS
+
+    image = Image.open(io.BytesIO(prepare_reference_image(data)))
+
+    assert image.width * image.height <= MAX_PIXELS
+
+
+def test_prepare_preserves_aspect_ratio_when_downscaling():
+    data = make_image_bytes(5000, 3500)
+
+    image = Image.open(io.BytesIO(prepare_reference_image(data)))
+
+    assert image.width / image.height == pytest.approx(5000 / 3500, rel=1e-2)
+
+
+# ---------- call_image_api（阶段四：图像生成/编辑） ----------
+
+def make_b64_response(image_bytes: bytes) -> dict:
+    return {"data": [{"b64_json": base64.b64encode(image_bytes).decode()}]}
+
+
+async def test_call_image_api_sends_single_reference_as_string(httpx_mock):
+    """只有一张参考图时 image 必须是字符串，不是单元素数组"""
+    httpx_mock.add_response(json=make_b64_response(make_jpeg_bytes()))
+
+    await call_image_api(
+        "试穿", [make_png_bytes()], api_key="k", model="doubao-image-test"
+    )
+
+    body = json.loads(httpx_mock.get_request().content)
+    assert isinstance(body["image"], str)
+    assert body["image"].startswith("data:image/png;base64,")
+    assert body["model"] == "doubao-image-test"
+
+
+async def test_call_image_api_sends_multiple_references_as_array(httpx_mock):
+    httpx_mock.add_response(json=make_b64_response(make_jpeg_bytes()))
+
+    await call_image_api(
+        "试穿", [make_png_bytes(), make_jpeg_bytes()], api_key="k", model="m"
+    )
+
+    body = json.loads(httpx_mock.get_request().content)
+    assert isinstance(body["image"], list)
+    assert len(body["image"]) == 2
+    assert body["image"][0].startswith("data:image/png;base64,")
+    assert body["image"][1].startswith("data:image/jpeg;base64,")
+
+
+async def test_call_image_api_requests_b64_json_without_watermark(httpx_mock):
+    """b64_json 避免签名 URL 24h 过期；watermark 显式关闭，行为不受账号策略变化影响"""
+    httpx_mock.add_response(json=make_b64_response(make_jpeg_bytes()))
+
+    await call_image_api("试穿", [make_png_bytes()], api_key="k", model="m", size="2K")
+
+    body = json.loads(httpx_mock.get_request().content)
+    assert body["response_format"] == "b64_json"
+    assert body["watermark"] is False
+    assert body["size"] == "2K"
+
+
+async def test_call_image_api_posts_to_generations_endpoint(httpx_mock):
+    httpx_mock.add_response(json=make_b64_response(make_jpeg_bytes()))
+
+    await call_image_api("试穿", [make_png_bytes()], api_key="k", model="m")
+
+    request = httpx_mock.get_request()
+    assert str(request.url) == f"{ARK_BASE_URL}/images/generations"
+    assert request.headers["Authorization"] == "Bearer k"
+
+
+async def test_call_image_api_returns_decoded_image_bytes(httpx_mock):
+    expected = make_jpeg_bytes()
+    httpx_mock.add_response(json=make_b64_response(expected))
+
+    result = await call_image_api("试穿", [make_png_bytes()], api_key="k", model="m")
+
+    assert result == expected
+
+
+async def test_call_image_api_normalizes_oversized_reference(httpx_mock):
+    """规范化由客户端内部完成，调用方不需要记得先处理"""
+    httpx_mock.add_response(json=make_b64_response(make_jpeg_bytes()))
+
+    await call_image_api(
+        "试穿", [make_image_bytes(5000, 3500)], api_key="k", model="m"
+    )
+
+    sent = json.loads(httpx_mock.get_request().content)["image"]
+    image = Image.open(io.BytesIO(base64.b64decode(sent.split(",", 1)[1])))
+    assert image.width * image.height <= MAX_PIXELS
+
+
+async def test_call_image_api_raises_value_error_without_b64_payload(httpx_mock):
+    httpx_mock.add_response(json={"data": [{"url": "https://example.com/x.jpg"}]})
+
+    with pytest.raises(ValueError):
+        await call_image_api("试穿", [make_png_bytes()], api_key="k", model="m")
+
+
+async def test_call_image_api_carries_upstream_status_code(httpx_mock):
+    """状态码必须能被上层读到：429 要透传给前端提示可重试，其余转 503"""
+    httpx_mock.add_response(status_code=429, json={"error": {"message": "rate limited"}})
+
+    with pytest.raises(UpstreamError) as excinfo:
+        await call_image_api("试穿", [make_png_bytes()], api_key="k", model="m")
+
+    assert excinfo.value.status_code == 429
+
+
+async def test_call_image_api_raises_upstream_error_on_auth_failure(httpx_mock):
+    httpx_mock.add_response(status_code=401, json={"error": {"message": "invalid key"}})
+
+    with pytest.raises(UpstreamError) as excinfo:
+        await call_image_api("试穿", [make_png_bytes()], api_key="k", model="m")
+
+    assert excinfo.value.status_code == 401
