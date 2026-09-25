@@ -12,7 +12,8 @@ from services.garment_roles import (
     ROLE_SHOES,
     ROLE_TOP,
 )
-from services.tryon import build_tryon_prompt, describe_garment
+from services.seedream_client import UpstreamError
+from services.tryon import build_tryon, build_tryon_prompt, describe_garment
 
 
 DEFAULT_CATEGORY = {
@@ -157,3 +158,80 @@ def test_build_tryon_prompt_rejects_empty_list():
     """空列表说明调用方漏了校验，不该静默生成一张没换任何衣服的图（那也要花钱）"""
     with pytest.raises(ValueError):
         build_tryon_prompt([])
+
+
+# ---------- build_tryon（编排层，monkeypatch call_image_api） ----------
+
+MODEL_PHOTO = b"model-photo-bytes"
+
+
+def _capture_image_call(monkeypatch, result: bytes = b"generated-image") -> list[dict]:
+    calls: list[dict] = []
+
+    async def fake(prompt, images, **kwargs):
+        calls.append({"prompt": prompt, "images": images, "kwargs": kwargs})
+        return result
+
+    monkeypatch.setattr("services.tryon.call_image_api", fake)
+    return calls
+
+
+async def test_build_tryon_puts_model_first_and_garments_in_sorted_order(monkeypatch):
+    """参考图顺序必须与 prompt 里的编号一一对应，否则「第 N 张」全部错位"""
+    calls = _capture_image_call(monkeypatch)
+    top = dict(make_garment(5, sub_category="衬衫"), image_bytes=b"top-bytes")
+    shoes = dict(make_garment(2, role=ROLE_SHOES, sub_category="运动鞋"), image_bytes=b"shoes-bytes")
+
+    await build_tryon(
+        MODEL_PHOTO, [shoes, top], api_key="k", model="m"  # 故意乱序传入
+    )
+
+    assert calls[0]["images"] == [MODEL_PHOTO, b"top-bytes", b"shoes-bytes"]
+
+
+async def test_build_tryon_sends_the_shared_prompt(monkeypatch):
+    calls = _capture_image_call(monkeypatch)
+    garments = [dict(make_garment(1, sub_category="卫衣"), image_bytes=b"x")]
+
+    await build_tryon(MODEL_PHOTO, garments, api_key="k", model="m")
+
+    assert calls[0]["prompt"] == build_tryon_prompt(garments)
+
+
+async def test_build_tryon_passes_credentials_through(monkeypatch):
+    calls = _capture_image_call(monkeypatch)
+    garments = [dict(make_garment(1), image_bytes=b"x")]
+
+    await build_tryon(
+        MODEL_PHOTO, garments, api_key="secret", model="doubao-image-test",
+        base_url="https://example.com/api/v3",
+    )
+
+    assert calls[0]["kwargs"] == {
+        "api_key": "secret",
+        "model": "doubao-image-test",
+        "base_url": "https://example.com/api/v3",
+    }
+
+
+async def test_build_tryon_rejects_empty_garments_without_calling_api(monkeypatch):
+    calls = _capture_image_call(monkeypatch)
+
+    with pytest.raises(ValueError):
+        await build_tryon(MODEL_PHOTO, [], api_key="k", model="m")
+
+    assert calls == []
+
+
+async def test_build_tryon_propagates_upstream_error(monkeypatch):
+    """上游错误必须往上抛给 API 层分类（429 透传 / 其余 503），不能在这里吞掉"""
+
+    async def failing(prompt, images, **kwargs):
+        raise UpstreamError(429, "rate limited")
+
+    monkeypatch.setattr("services.tryon.call_image_api", failing)
+
+    with pytest.raises(UpstreamError):
+        await build_tryon(
+            MODEL_PHOTO, [dict(make_garment(1), image_bytes=b"x")], api_key="k", model="m"
+        )
