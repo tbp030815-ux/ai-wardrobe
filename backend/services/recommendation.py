@@ -9,6 +9,16 @@
 """
 import httpx
 
+from services.garment_roles import (
+    CATEGORY_ROLE,
+    ROLE_ACCESSORY,
+    ROLE_BOTTOM,
+    ROLE_CATEGORIES,
+    ROLE_LABELS,
+    ROLE_ORDER,
+    ROLE_SHOES,
+    ROLE_TOP,
+)
 from services.seedream_client import ARK_BASE_URL, call_chat_api, parse_semantics_json
 
 DEFAULT_OCCASION = "休闲"
@@ -21,18 +31,7 @@ OCCASION_STYLES: dict[str, set[str]] = {
 }
 SUPPORTED_OCCASIONS = tuple(OCCASION_STYLES)
 
-ROLE_TOP, ROLE_BOTTOM, ROLE_SHOES, ROLE_ACCESSORY = "上衣", "下装", "鞋", "配饰"
-# 角色 → 允许的 category 取值（下装把裤子和裙子合成一个角色，二者只穿一件）
-ROLE_CATEGORIES: dict[str, set[str]] = {
-    ROLE_TOP: {"上衣"},
-    ROLE_BOTTOM: {"裤子", "裙子"},
-    ROLE_SHOES: {"鞋"},
-    ROLE_ACCESSORY: {"配饰"},
-}
-CATEGORY_ROLE: dict[str, str] = {c: r for r, cats in ROLE_CATEGORIES.items() for c in cats}
 REQUIRED_ROLES = (ROLE_TOP, ROLE_BOTTOM, ROLE_SHOES)  # 配饰是可选加分项
-ROLE_ORDER = (ROLE_TOP, ROLE_BOTTOM, ROLE_SHOES, ROLE_ACCESSORY)
-ROLE_LABELS = {ROLE_TOP: "上衣", ROLE_BOTTOM: "裤子或裙子", ROLE_SHOES: "鞋"}
 MAX_CANDIDATES_PER_ROLE = 4
 
 HEAVY_KEYWORDS = ("羽绒", "棉服", "棉袄", "大衣", "毛衣", "针织", "加绒", "羊绒", "厚")

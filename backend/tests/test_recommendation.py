@@ -7,10 +7,8 @@ D 组：编排层（build_recommendation），monkeypatch call_chat_api 验证�
 import httpx
 import pytest
 
+from services.garment_roles import ROLE_ACCESSORY, ROLE_BOTTOM, ROLE_TOP
 from services.recommendation import (
-    ROLE_ACCESSORY,
-    ROLE_BOTTOM,
-    ROLE_TOP,
     build_candidates,
     build_prompt,
     build_recommendation,
