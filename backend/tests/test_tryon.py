@@ -13,7 +13,13 @@ from services.garment_roles import (
     ROLE_TOP,
 )
 from services.seedream_client import UpstreamError
-from services.tryon import build_tryon, build_tryon_prompt, describe_garment
+from services.tryon import (
+    MIN_REFERENCE_PIXELS,
+    build_tryon,
+    build_tryon_prompt,
+    describe_garment,
+    is_low_resolution,
+)
 
 
 DEFAULT_CATEGORY = {
@@ -73,6 +79,23 @@ def test_describe_garment_drops_color_when_name_qualifies_it():
     item = make_garment(1, role=ROLE_BOTTOM, sub_category="深蓝色牛仔裤", color="蓝色")
 
     assert describe_garment(item) == "深蓝色牛仔裤（下装）"
+
+
+# ---------- is_low_resolution ----------
+
+def test_is_low_resolution_flags_tiny_reference():
+    """40×40 是缩略图级别，模型只能靠脑补，保真无从谈起"""
+    assert is_low_resolution((40, 40)) is True
+
+
+def test_is_low_resolution_accepts_a_thumbnail_that_actually_worked():
+    """探路时 430×458（196,940 px）的鞋子参考图出图是好的，
+    阈值必须低于它，否则会对实际可用的图误报"""
+    assert is_low_resolution((430, 458)) is False
+
+
+def test_min_reference_pixels_is_a_floor_not_a_quality_bar():
+    assert MIN_REFERENCE_PIXELS <= 430 * 458
 
 
 # ---------- build_tryon_prompt ----------

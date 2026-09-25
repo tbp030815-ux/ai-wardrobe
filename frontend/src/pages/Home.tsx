@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { fetchRecommendation } from '../api/client'
 import WardrobeGrid from '../components/WardrobeGrid'
 import type { Recommendation } from '../types'
@@ -142,7 +143,18 @@ export default function Home() {
             ))}
 
             {/* 单品：直接复用衣柜网格（RecommendedItem 是 Clothes 的子类型） */}
-            {data.items.length > 0 && <WardrobeGrid items={data.items} />}
+            {data.items.length > 0 && (
+              <>
+                {/* 用 query param 而不是 router state：刷新后预选仍在，链接也能分享 */}
+                <Link
+                  to={`/tryon?ids=${data.items.map((item) => item.id).join(',')}`}
+                  className="mb-3 block rounded-lg bg-indigo-600 px-4 py-2 text-center text-sm font-medium text-white shadow-sm hover:bg-indigo-500"
+                >
+                  试穿这套
+                </Link>
+                <WardrobeGrid items={data.items} />
+              </>
+            )}
           </>
         )
       )}

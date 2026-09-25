@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import type { Recommendation, RecommendedItem } from '../types'
 import * as client from '../api/client'
 import Home from './Home'
@@ -44,9 +45,28 @@ const sampleRecommendation: Recommendation = {
 const CITY_INPUT = '城市'
 const LOADING_HINT = '正在根据天气挑选…'
 
+/** 渲染当前地址，用来断言跳转结果 */
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="location">{`${location.pathname}${location.search}`}</div>
+}
+
+/**
+ * Home 里的「试穿这套」是 `<Link>`，没有 Router 上下文时 react-router 会直接抛
+ * "useHref() may be used only in the context of a <Router>"，所以每个用例都要包一层。
+ */
+function renderHome() {
+  return render(
+    <MemoryRouter initialEntries={['/']}>
+      <Home />
+      <LocationProbe />
+    </MemoryRouter>,
+  )
+}
+
 async function renderLoaded(rec: Recommendation = sampleRecommendation) {
   vi.mocked(client.fetchRecommendation).mockResolvedValue(rec)
-  render(<Home />)
+  renderHome()
   await screen.findByText(rec.weather.description)
 }
 
@@ -109,7 +129,7 @@ describe('Home', () => {
   it('uses the saved city from localStorage on first load', async () => {
     localStorage.setItem('wardrobe:city', '杭州')
 
-    render(<Home />)
+    renderHome()
     await screen.findByText('晴间多云')
 
     expect(client.fetchRecommendation).toHaveBeenCalledWith('杭州', '休闲')
@@ -138,7 +158,7 @@ describe('Home', () => {
       new Error('天气服务暂时不可用，请稍后重试'),
     )
 
-    render(<Home />)
+    renderHome()
 
     expect(await screen.findByText('天气服务暂时不可用，请稍后重试')).toBeTruthy()
     expect(screen.getByLabelText(CITY_INPUT)).toBeTruthy()
@@ -147,8 +167,33 @@ describe('Home', () => {
   it('shows a loading hint while fetching', () => {
     vi.mocked(client.fetchRecommendation).mockReturnValue(new Promise(() => {}))
 
-    render(<Home />)
+    renderHome()
 
     expect(screen.getByText(LOADING_HINT)).toBeTruthy()
+  })
+
+  it('links to the try-on page pre-selecting the recommended items', async () => {
+    await renderLoaded()
+
+    fireEvent.click(screen.getByRole('link', { name: '试穿这套' }))
+
+    expect(screen.getByTestId('location').textContent).toBe('/tryon?ids=1')
+  })
+
+  it('lists every recommended id in the try-on link', async () => {
+    await renderLoaded({
+      ...sampleRecommendation,
+      items: [tee, { ...tee, id: 8 }, { ...tee, id: 12 }],
+    })
+
+    fireEvent.click(screen.getByRole('link', { name: '试穿这套' }))
+
+    expect(screen.getByTestId('location').textContent).toBe('/tryon?ids=1,8,12')
+  })
+
+  it('hides the try-on link when nothing was recommended', async () => {
+    await renderLoaded({ ...sampleRecommendation, items: [], gaps: ['衣柜里还没有鞋'] })
+
+    expect(screen.queryByRole('link', { name: '试穿这套' })).toBeNull()
   })
 })

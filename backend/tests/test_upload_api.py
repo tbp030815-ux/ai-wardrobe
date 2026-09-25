@@ -133,6 +133,32 @@ def test_upload_keeps_record_when_analysis_fails(client, monkeypatch):
     assert data["cropped_path"] is not None
 
 
+def test_wardrobe_item_exposes_role(client):
+    """试穿页要按角色分组，前端不该再复制一份 category → role 映射"""
+    client.post(
+        "/api/upload",
+        files={"file": ("a.jpg", make_png_bytes(), "image/png")},
+    )
+
+    assert client.get("/api/wardrobe").json()[0]["role"] == "上衣"
+
+
+def test_wardrobe_role_is_none_for_unrecognized_category(client, monkeypatch):
+    """识别失败的衣物（category 为 null）前端需要单独一个分组，不能算进任何角色"""
+
+    async def unknown_analyze(image_bytes: bytes, **kwargs) -> dict:
+        return {"category": None, "sub_category": None, "color": None}
+
+    monkeypatch.setattr("api.upload.analyze_clothes", unknown_analyze)
+
+    client.post(
+        "/api/upload",
+        files={"file": ("a.jpg", make_png_bytes(), "image/png")},
+    )
+
+    assert client.get("/api/wardrobe").json()[0]["role"] is None
+
+
 def test_wardrobe_lists_uploaded_clothes(client):
     client.post(
         "/api/upload",

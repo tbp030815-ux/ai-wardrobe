@@ -27,6 +27,11 @@ from services.seedream_client import ARK_BASE_URL, call_image_api
 _UNKNOWN_ROLE_RANK = len(ROLE_ORDER)
 _ROLE_RANK = {role: index for index, role in enumerate(ROLE_ORDER)}
 
+# 参考图「明显不可用」的像素地板。**这不是画质标准**：探路时 430×458（196,940 px）
+# 的鞋子参考图出图是好的，阈值定高了会对实际能用的图标报，用户就会学会无视这个提示。
+# 只拦缩略图级别（40×40 = 1,600 px）那种模型只能靠脑补的输入。
+MIN_REFERENCE_PIXELS = 10_000
+
 TRYON_PROMPT_TEMPLATE = """你是一位虚拟试穿助手。请把下面列出的衣物穿到模特身上，生成一张真实的试穿照片。
 
 参考图（顺序即编号）：
@@ -43,6 +48,11 @@ TRYON_PROMPT_TEMPLATE = """你是一位虚拟试穿助手。请把下面列出�
 
 同一部位列了多件时，以先列出的那件为准，后列出的忽略。
 只输出效果图，不加任何文字、水印或边框，也不要复制参考图角落的水印和店铺标记。"""
+
+
+def is_low_resolution(size: tuple[int, int]) -> bool:
+    """参考图像素低于地板值时返回 True —— 这种输入模型只能靠脑补，保真无从谈起"""
+    return size[0] * size[1] < MIN_REFERENCE_PIXELS
 
 
 def role_of(item: dict) -> str | None:

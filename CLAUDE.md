@@ -52,25 +52,32 @@ backend/
 ├── api/
 │   ├── upload.py              # POST /api/upload（抠图 → 识别 → 入库）
 │   ├── wardrobe.py            # GET /api/wardrobe, GET /api/clothes/{id}
-│   └── recommendation.py      # GET /api/recommendation（天气 + 穿搭推荐）
+│   ├── recommendation.py      # GET /api/recommendation（天气 + 穿搭推荐）
+│   ├── model.py               # POST /api/model, GET /api/models, PUT /api/models/{id}/default
+│   └── tryon.py               # POST /api/tryon, GET /api/outfits
 ├── services/
 │   ├── background_removal.py  # rembg 本地抠图
-│   ├── seedream_client.py     # 火山方舟 API 客户端（识图 + 文本对话）
+│   ├── seedream_client.py     # 火山方舟 API 客户端（识图 + 文本对话 + 图像生成）
 │   ├── weather.py             # Open-Meteo 天气（免 Key）
-│   └── recommendation.py      # 推荐引擎：规则筛选 → LLM 精选 → 降级
+│   ├── recommendation.py      # 推荐引擎：规则筛选 → LLM 精选 → 降级
+│   ├── garment_roles.py       # 品类 → 部位（上衣/下装/鞋/配饰）映射，推荐与试穿共用
+│   └── tryon.py               # 试穿：衣物描述 → prompt → call_image_api
 ├── storage/
 │   ├── database.py            # SQLite 连接 & 建表
-│   └── clothes_store.py       # 衣物数据访问
+│   ├── clothes_store.py       # 衣物数据访问
+│   ├── model_store.py         # 模特数据访问（is_default 记账）
+│   └── outfits_store.py       # 试穿记录（clothes_ids JSON 的读写）
 ├── tests/                     # pytest
-├── uploads/                   # 上传图片存储
+├── uploads/                   # 上传图片存储（uploads/tryon/ 存生成结果）
 ├── requirements.txt           # 运行时依赖
 └── requirements-dev.txt       # 含测试依赖
 frontend/
 ├── src/App.tsx                # 路由框架：/ (今日推荐) /wardrobe (衣柜) /tryon (试穿)
-├── src/types.ts               # Clothes 等接口定义
+├── src/types.ts               # Clothes / Model / Outfit / TryOnResult
 ├── src/api/client.ts          # fetch 封装
-├── src/pages/                 # Home / Wardrobe / TryOn（Home、Wardrobe 已对接后端）
-├── src/components/            # WardrobeGrid
+├── src/pages/                 # Home / Wardrobe / TryOn（三个页面均已对接后端）
+├── src/components/            # WardrobeGrid（可选选中模式）
+├── src/utils/                 # tryonIds.ts / variants.ts（纯函数，重点单测）
 └── vite.config.ts             # 代理 /api + /uploads
 PLAN.md                        # 完整技术方案（开发计划、API 设计、数据库表）
 ```
@@ -78,8 +85,8 @@ PLAN.md                        # 完整技术方案（开发计划、API 设计�
 ## 数据库表
 
 - **clothes**: 衣物（image_path 原图、cropped_path 抠图PNG、category/color/style/season/tags）
-- **models**: 模特全身照（is_default 默认模特）
-- **outfits**: 穿搭记录（model_id + clothes_ids JSON）
+- **models**: 模特全身照（is_default 默认模特；SQLite 无 bool，读出来是 0/1，出参前必须 `bool()` 转）
+- **outfits**: 试穿记录（model_id + clothes_ids 存 TEXT 但**出参必须是数组** + generated_by 图像模型 id + result_image_url）
 
 ## 开发约定
 
@@ -89,7 +96,8 @@ PLAN.md                        # 完整技术方案（开发计划、API 设计�
 - **新装 Python 依赖时**，先用 `pip install` 再手动加到 `requirements.txt`（测试依赖加到 `requirements-dev.txt`）
 - **前端样式只用 Tailwind**，不要引入第三方 UI 库
 - **前端测试注意**：jsdom 测试文件顶部需加 `// @vitest-environment jsdom`；vitest 未开 `globals`，需手动 `cleanup()`
-- **试穿（阶段四）用原图 `image_path`，`cropped_path` 仅用于衣柜卡片展示**：抠图边缘有 halo，且 rembg 可能误扣衣物部件（如裤脚连着的鞋），喂给图像编辑模型会带出脏边；官方换装 demo 也喂带背景的商品原图
+- **试穿用原图 `image_path`，`cropped_path` 仅用于衣柜卡片展示**：抠图边缘有 halo，且 rembg 可能误扣衣物部件（如裤脚连着的鞋），喂给图像编辑模型会带出脏边；官方换装 demo 也喂带背景的商品原图
+- **花钱的调用只能挂在 click handler 上，绝不能放进 `useEffect`**：`main.tsx` 开了 `StrictMode`，dev 下 effect 双跑 = 一次点击打两次付费 API（试穿已按此实现）
 
 ## 配置
 
@@ -99,7 +107,7 @@ PLAN.md                        # 完整技术方案（开发计划、API 设计�
 |---|---|
 | `SEEDREAM_API_KEY` | 火山方舟 API Key。**留空时跳过 AI 识别**，衣物仍能抠图入库（语义字段为 null） |
 | `SEEDREAM_VISION_MODEL` | 衣物识别模型，当前为 `doubao-seed-2-1-lite-260915`（旧版 `doubao-seed-1-6-vision-250815` 已下线，调用会返回 `InvalidEndpointOrModel.NotFound`） |
-| `SEEDREAM_IMAGE_MODEL` | 图像生成/编辑模型（阶段四 AI 试穿用） |
+| `SEEDREAM_IMAGE_MODEL` | 图像生成/编辑模型（阶段四 AI 试穿），当前为 `doubao-seedream-4-0-250828`，写进 `outfits.generated_by` |
 | `ARK_BASE_URL` | 火山方舟地址 `https://ark.cn-beijing.volces.com/api/v3` |
 
 ## 部署
@@ -125,10 +133,39 @@ GET /api/recommendation?location=上海&occasion=休闲&user_id=1
 - `occasion` 取值：通勤 / 休闲 / 运动 / 约会 / 正式，非法值回退「休闲」
 - 天气来自 Open-Meteo（免费无 Key），中文城市名直接传 `name=` 参数
 
+## 试穿接口（阶段四）
+
+```
+POST /api/tryon    {"model_id": 1, "clothes_ids": [9, 10, 11]}   # model_id 可省略，用默认模特
+GET  /api/outfits?limit=20
+```
+
+| 情况 | 行为 |
+|---|---|
+| 正常 | 200，`Outfit` + `warnings`（警告只出参、不落库） |
+| `clothes_ids` 为空 / 超过 8 件 | 400 |
+| 衣物或模特不存在 | 404 |
+| 没有 `model_id` 且一张模特照都没传 | 400 |
+| 上游限流 | **429 透传**（前端提示「稍后重试」） |
+| 未配 Key / 上游不可用 / 超时 | 503（超时文案注明「本次可能已产生费用」） |
+
+- 模特：`POST /api/model`（multipart `file`，字段名与 upload 一致）、`GET /api/models`、`PUT /api/models/{id}/default`
+- `is_default` 三条规则：第一张上传的**自动成为默认**；无标记行时**回退到最新一张**（传了 3 张但没点过「设为默认」不该 404）；设默认在**一个事务里**先置位再清其余，失败回滚
+- **一次请求 = 一张图，没有批量端点**：「对比生成」由前端**串行**发起（逐张上屏、避开限流、可中途放弃）
+- 结果图写 `uploads/tryon/{uuid}.jpg`（JPEG 不写 PNG：2K PNG 3-6MB / JPEG q88 约 400KB），扩展名由 `guess_mime` 推导
+- 前端「对比生成」：每个变体每个部位只放一件（同部位多件会被后端按 id 平局规则丢掉一件），笛卡尔积超 4 就只变单品最多的那个角色
+
+## 两条产品级限制（实测得出，别再往 prompt 里投入）
+
+1. **换上衣时手臂姿势会漂** —— 衣物与手臂重叠，模型必须重绘该区域，重绘时顺手重摆了手臂。已试过「局部修图」「手臂位置必须一致」「点明遮挡关系」三种强指令，**全部无效**（7 次真实调用）。换裤子不涉及手臂，姿势保得住。试穿页已显式注明这一差异
+2. **参考图的水印会传染到成图** —— 已用显式规则挡住，**代价是衣物自带的品牌标志可能一起丢**
+
 ## 当前进度
 
 - ✅ 阶段一：前后端骨架跑通
 - ✅ 阶段二：抠图 + 衣物识别 + 前端衣柜页对接，真实 API 联调通过
 - ✅ 阶段三：穿搭推荐（Open-Meteo 天气 + 规则/LLM 混合推荐 + 前端今日推荐页），后端 100 / 前端 25 测试全绿，真实端到端联调通过
-- ⏳ 阶段四：AI 试穿（需开通图像生成模型，推荐 `doubao-seedream-5-0-pro-260628`）
+- ✅ 阶段四：AI 试穿（模特管理 + 自由勾选多件 + 对比生成 + 历史记录 + 推荐页「试穿这套」联动），后端 203 / 前端 94 测试全绿。**已知限制：换上衣时手臂姿势会漂、参考图水印会传染**，见上文
+- ⏳ 阶段五：用户认证、Docker 部署、国际化
+- ⏳ **阶段四待办**：手工端到端联调（会真实扣费，7 步入 `PLAN.md`）；试穿结果删除管理（结果图持续累积）；模特体型识别（`height_cm` / `body_type` 仍为 NULL）
 - 完整路线图见 `PLAN.md`

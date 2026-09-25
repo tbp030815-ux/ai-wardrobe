@@ -14,6 +14,44 @@ export interface Clothes {
   season: string | null
   tags: string | null
   created_at: string
+  /**
+   * 上衣 / 下装 / 鞋 / 配饰，由后端按 category 算出来（GET /api/wardrobe 才有）。
+   * **必须是可选的**：推荐接口、单元测试的 fixture 里都没有这个字段，
+   * 而 `tsc` 会连测试文件一起类型检查 —— 写成必填会让 `npm test` 绿而 `npm run build` 挂。
+   * 识别失败的衣物是 null，需要单独分组。
+   */
+  role?: string | null
+}
+
+/** 模特全身照（对应后端 models 表的一行） */
+export interface Model {
+  id: number
+  user_id: number
+  /** 试穿时喂给图像模型的就是这张原图 */
+  image_path: string
+  /** 本期不采集，恒为 null */
+  height_cm: number | null
+  body_type: string | null
+  is_default: boolean
+  created_at: string
+}
+
+/** 一次试穿记录（对应后端 outfits 表的一行） */
+export interface Outfit {
+  id: number
+  user_id: number
+  model_id: number | null
+  /** 库里是 JSON 字符串，后端已还原成数组 */
+  clothes_ids: number[]
+  /** 实际使用的图像模型 id —— 换模型后历史记录不会说谎 */
+  generated_by: string
+  result_image_url: string
+  created_at: string
+}
+
+/** 试穿响应 = 记录 + 本次输入的质量提示（warnings 只出参、不落库） */
+export interface TryOnResult extends Outfit {
+  warnings: string[]
 }
 
 /** 天气（对应后端 services/weather.py 的 Weather） */

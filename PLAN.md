@@ -1,6 +1,6 @@
 # AI 智能衣橱 — 技术方案总结
 
-> 最后更新：2026-09-25（阶段三已完成）
+> 最后更新：2026-09-25（阶段四已完成）
 
 ---
 
@@ -287,23 +287,46 @@ GET https://api.open-meteo.com/v1/forecast?latitude=..&longitude=..
 - 新增 `call_chat_api` 到 `seedream_client.py`（原设计想用 `call_seedream` 统一入口，但视觉与文本对话的 payload 差异明显，分开更清晰）
 - 推荐结果**不落库**（`outfits` 表留给阶段四试穿，需要 model_id）
 
-### 阶段四：AI 试穿功能（Day 9-14）
+### 阶段四：AI 试穿功能（Day 9-14）✅ 已完成
 
-**目标**：选一件已抠好的衣服，穿上到模特身上
+**目标**：勾选衣柜里的衣物，穿到模特身上
 
 ```python
-# 后端 services/tryon_service.py
+# 后端 services/tryon.py —— 把「穿什么」翻译成模型能执行的 prompt
+#   1. sort_key / describe_garment：按角色自上而下、同角色按 id 排序，写成可读描述
+#   2. build_tryon_prompt：参考图顺序约定为 [模特, 衣物1, 衣物2, ...]，与编号严格对应
+#   3. build_tryon：薄封装，交给 services/seedream_client.call_image_api
 
-async def run_tryon(person_image_bytes, garment_image_bytes, category):
-    # 通过 Seedream API 的参考图换装模式调用
-    # 传入两张图：模特全身照 + 已抠好的衣服 PNG
-    # 等待返回合成后的效果图
-    pass
+# 后端 api/tryon.py
+POST /api/tryon   {model_id?, clothes_ids: [...]}  → Outfit + warnings
+GET  /api/outfits?limit=N                          → Outfit[]
 ```
 
 **验收标准**：
-- 输入模特照 + 衣服 PNG → 返回合成效果图
-- 效果可接受（姿势不变，光影自然）
+- ✅ 输入模特照 + 衣物原图 → 返回合成效果图
+- ⚠️ 「姿势不变」**未达成** —— 换上衣时手臂会漂（见下方已知限制）
+
+**与原设计的差异**：
+- 模块名是 `services/tryon.py`，不是 `tryon_service.py`
+- **喂原图而不是抠图 PNG**（原设计写的是「已抠好的衣服 PNG」）：抠图边缘有 halo，
+  rembg 还可能误裁衣物部件（裤脚连着的鞋），喂给图像编辑模型会带出脏边。
+  官方换装 demo 也喂带背景的商品原图。`cropped_path` 只用于衣柜卡片展示
+- **不做 `download_image`**：用 `response_format: "b64_json"` 直接拿字节，
+  整个「签名 URL 24h 过期」故障模式消失
+- **不做放大**：文档写的 921,600 像素下限实测并未强制（430×458 = 196,940 px 生成成功），
+  放大只引入插值伪影 → `prepare_reference_image` 只降不升
+- **不做批量端点**：一次请求 = 一张图，「对比生成」由前端串行发起。
+  一个请求里串 4 张会撞上网关超时，用户也无法中途放弃
+- 新增 `UpstreamError(status_code, ...)`：原有客户端把状态码压进错误字符串，
+  而试穿需要 **429 透传**让前端区分「稍后再试」和「彻底坏了」
+- `generated_by` 写实际的图像模型 id，不写字面量 `'seedream'`
+
+**两条产品级限制**（实测得出，别再往 prompt 里投入）：
+
+1. **换上衣时姿势会漂** —— 衣物与手臂重叠，模型必须重绘该区域，重绘时顺手重摆了手臂。
+   已试过「局部修图」「手臂位置必须一致」「点明遮挡关系」三种强指令，**全部无效**。
+   换裤子（不涉及手臂）时姿势保得住。产品侧在试穿页显式注明这一差异
+2. **参考图的水印会传染到成图**，已用显式规则挡住，**代价是衣物自带的品牌标志可能一起丢**
 
 ### 阶段五：完善与优化（Day 15-18）
 

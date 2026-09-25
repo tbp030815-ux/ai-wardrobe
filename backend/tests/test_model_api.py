@@ -1,0 +1,181 @@
+"""
+模特 API 测试（阶段四 TDD 循环 J）
+
+模特照不需要抠图（试穿直接喂原图），所以这里没有外部 AI 依赖，
+被测的是上传落盘、默认模特的记账、以及出参的类型。
+"""
+import asyncio
+import io
+
+import aiosqlite
+import pytest
+from fastapi.testclient import TestClient
+from PIL import Image
+
+from config import Settings
+from main import app
+from storage.database import create_tables, get_db
+
+
+def make_jpeg_bytes() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (60, 80), (180, 160, 140)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+@pytest.fixture
+def client(tmp_path):
+    db_path = tmp_path / "test.db"
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+
+    async def setup_db():
+        async with aiosqlite.connect(str(db_path)) as conn:
+            await create_tables(conn)
+
+    asyncio.run(setup_db())
+
+    async def override_db():
+        async with aiosqlite.connect(str(db_path)) as conn:
+            conn.row_factory = aiosqlite.Row
+            yield conn
+
+    test_settings = Settings(
+        api_key="test-key",
+        vision_model="test-vision-model",
+        image_model="test-image-model",
+        base_url="https://test.example.com/api/v3",
+        upload_dir=upload_dir,
+    )
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[__import__("config").get_settings] = lambda: test_settings
+
+    with TestClient(app) as c:
+        yield c
+
+    app.dependency_overrides.clear()
+
+
+def upload(client, name="model.jpg"):
+    return client.post(
+        "/api/model", files={"file": (name, make_jpeg_bytes(), "image/jpeg")}
+    )
+
+
+# ---------- POST /api/model ----------
+
+def test_upload_model_returns_record(client):
+    response = upload(client)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == 1
+    assert data["image_path"].startswith("/uploads/")
+    assert data["image_path"].endswith(".jpg")
+
+
+def test_upload_model_saves_file_on_disk(client, tmp_path):
+    upload(client)
+
+    files = list((tmp_path / "uploads").iterdir())
+    assert len(files) == 1
+    assert files[0].read_bytes() == make_jpeg_bytes()
+
+
+def test_upload_model_keeps_original_content(client, tmp_path):
+    """试穿喂的是模特原图，任何转码都会影响出图质量"""
+    upload(client)
+
+    saved = next((tmp_path / "uploads").iterdir()).read_bytes()
+    assert Image.open(io.BytesIO(saved)).size == (60, 80)
+
+
+def test_first_uploaded_model_is_default(client):
+    """不自动设默认，用户上传完立刻去试穿就会拿不到模特"""
+    assert upload(client).json()["is_default"] is True
+
+
+def test_second_uploaded_model_is_not_default(client):
+    upload(client)
+
+    assert upload(client, "second.jpg").json()["is_default"] is False
+
+
+def test_upload_rejects_empty_file(client):
+    response = client.post(
+        "/api/model", files={"file": ("m.jpg", b"", "image/jpeg")}
+    )
+
+    assert response.status_code == 400
+
+
+def test_upload_rejects_invalid_image(client):
+    """在这里挡掉，而不是等 60 秒的付费生成跑完才报错"""
+    response = client.post(
+        "/api/model", files={"file": ("m.jpg", b"not an image", "image/jpeg")}
+    )
+
+    assert response.status_code == 400
+
+
+def test_upload_rejects_invalid_image_without_writing_file(client, tmp_path):
+    client.post("/api/model", files={"file": ("m.jpg", b"not an image", "image/jpeg")})
+
+    assert list((tmp_path / "uploads").iterdir()) == []
+
+
+# ---------- GET /api/models ----------
+
+def test_list_models_returns_bool_not_int(client):
+    """SQLite 存的是 0/1，直接序列化出去前端拿到的是 1 而不是 true"""
+    is_default = upload(client).json()["is_default"]
+
+    assert is_default is True
+
+
+def test_list_models_puts_default_first(client):
+    first = upload(client).json()["id"]
+    second = upload(client, "second.jpg").json()["id"]
+    client.put(f"/api/models/{second}/default")
+
+    response = client.get("/api/models")
+
+    assert response.status_code == 200
+    assert [row["id"] for row in response.json()] == [second, first]
+
+
+def test_list_models_is_empty_for_new_user(client):
+    assert client.get("/api/models").json() == []
+
+
+# ---------- PUT /api/models/{id}/default ----------
+
+def test_set_default_switches_default(client):
+    upload(client)
+    second = upload(client, "second.jpg").json()["id"]
+
+    response = client.put(f"/api/models/{second}/default")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == second
+    assert response.json()["is_default"] is True
+
+    models = client.get("/api/models").json()
+    assert [row["id"] for row in models if row["is_default"]] == [second]
+
+
+def test_set_default_404_for_unknown_id(client):
+    response = client.put("/api/models/999/default")
+
+    assert response.status_code == 404
+
+
+def test_set_default_404_keeps_existing_default(client):
+    """失败的切换不能把用户留在「一张默认都没有」的状态"""
+    first = upload(client).json()["id"]
+
+    client.put("/api/models/999/default")
+
+    models = client.get("/api/models").json()
+    assert [row["id"] for row in models if row["is_default"]] == [first]

@@ -7,7 +7,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from api.model import router as model_router
 from api.recommendation import router as recommendation_router
+from api.tryon import router as tryon_router
 from api.upload import router as upload_router
 from api.wardrobe import router as wardrobe_router
 from storage.database import init_db
@@ -34,6 +36,8 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.include_router(upload_router)
 app.include_router(wardrobe_router)
 app.include_router(recommendation_router)
+app.include_router(model_router)
+app.include_router(tryon_router)
 
 
 @app.get("/")
