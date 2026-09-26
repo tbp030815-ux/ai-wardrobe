@@ -112,10 +112,19 @@ describe('TryOn 加载', () => {
   })
 
   it('tells the user that the arm pose may drift', async () => {
-    // 换上衣时模型会重绘手臂区域，7 次真实调用都没挡住，只能写进产品文案
+    // 两轮 prompt 调优共 19 次真实调用都没挡住，只能写进产品文案
     await renderLoaded()
 
     expect(screen.getByText(/手臂姿势可能与原图有差异/)).toBeTruthy()
+  })
+
+  it('names occlusion as the trigger instead of "changing a top"', async () => {
+    // 实测触发条件是「参考衣物与手臂区域重叠」而非「换上衣」——
+    // 手臂搭在胯上挡住裤子时，只换裤子一样会漂。
+    // 成因写错会让用户在不匹配的场景里误判，也会让下一个人继续往错的方向调 prompt。
+    await renderLoaded()
+
+    expect(screen.getByText(/参考衣物与手臂区域重叠时/)).toBeTruthy()
   })
 })
 

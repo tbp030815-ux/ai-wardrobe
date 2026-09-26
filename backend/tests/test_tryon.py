@@ -171,6 +171,38 @@ def test_build_tryon_prompt_protects_unlisted_clothing():
     assert "未列出的衣物" in prompt
 
 
+def test_build_tryon_prompt_keeps_the_occlusion_rule_out_of_the_change_section():
+    """遮挡规则是「保持」类规则。落在「需要改动」段落里，等于把它归进了要改的那一类 ——
+    模型靠段落结构理解任务，位置即语义。"""
+    prompt = build_tryon_prompt([make_garment(1, sub_category="卫衣")])
+
+    assert prompt.index("挪动手臂") < prompt.index("需要改动")
+
+
+def test_build_tryon_prompt_normalizes_occlusion_instead_of_only_forbidding():
+    """根因是模型「完整展示衣物」的先验压过了保持姿势。只下禁令（不要挪动手臂）是在对抗症状，
+    要压住先验得直接告诉它遮挡才是正确答案。"""
+    prompt = build_tryon_prompt([make_garment(1, sub_category="卫衣")])
+
+    assert "衣物被手臂遮挡是正确结果" in prompt
+
+
+def test_build_tryon_prompt_does_not_invite_rerendering_the_covered_torso():
+    """「自然贴合身体」是邀请模型重绘整个上身（含被手臂挡住的那块），
+    与「不要挪动手臂」互相打架，模型只能二选一。"""
+    prompt = build_tryon_prompt([make_garment(1, sub_category="卫衣")])
+
+    assert "自然贴合身体" not in prompt
+
+
+def test_build_tryon_prompt_bounds_what_the_garment_references_mean():
+    """衣物参考图是平拍图，本身就暗示「衣物完整可见」。不显式限定它的用途，
+    这个暗示会持续和「保留遮挡」对抗。"""
+    prompt = build_tryon_prompt([make_garment(1, sub_category="卫衣")])
+
+    assert "不代表衣物必须完整露出" in prompt
+
+
 def test_build_tryon_prompt_writes_the_task_sentence_without_stray_spaces():
     prompt = build_tryon_prompt([make_garment(1, sub_category="卫衣")])
 
