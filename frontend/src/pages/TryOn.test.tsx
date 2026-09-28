@@ -347,6 +347,33 @@ describe('TryOn 历史记录', () => {
     expect(screen.getByLabelText('选择 上衣 2')).toHaveProperty('checked', true)
     expect(screen.getByLabelText('选择 下装 3')).toHaveProperty('checked', true)
   })
+
+  it('drops items that were deleted since the outfit was generated', async () => {
+    // outfits.clothes_ids 无外键，删掉的衣物 id 会留在历史里。
+    // 求交集是在这里做的：勾上的必须都是衣柜里还在的，否则生成时会 404
+    vi.mocked(client.fetchWardrobe).mockResolvedValue([topA, topB]) // 3 号牛仔裤已删
+    vi.mocked(client.fetchOutfits).mockResolvedValue([outfit(7, [1, 3])])
+    renderTryOn()
+    await screen.findByText('白色T恤')
+
+    fireEvent.click(await screen.findByRole('button', { name: '改用这几件' }))
+
+    expect(screen.getByLabelText('选择 上衣 1')).toHaveProperty('checked', true)
+    expect(screen.queryByLabelText('选择 下装 3')).toBeNull() // 卡片本身就不在了
+  })
+
+  it('does not generate while every item of a past outfit is gone', async () => {
+    vi.mocked(client.fetchWardrobe).mockResolvedValue([topB]) // 历史引用的 1、3 都没了
+    vi.mocked(client.fetchOutfits).mockResolvedValue([outfit(7, [1, 3])])
+    renderTryOn()
+    await screen.findByText('蓝色衬衫')
+
+    fireEvent.click(await screen.findByRole('button', { name: '改用这几件' }))
+
+    // 空选择=按钮禁用，不会拿着死 id 去打接口
+    expect(screen.getByRole('button', { name: GENERATE })).toHaveProperty('disabled', true)
+    expect(client.generateTryOn).not.toHaveBeenCalled()
+  })
 })
 
 describe('TryOn 删除模特照', () => {
