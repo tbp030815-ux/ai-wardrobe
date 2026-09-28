@@ -27,9 +27,11 @@ interface Props {
   selectedIds?: number[]
   /** 不传 = 只读模式，渲染结果与加选择功能之前完全一致（Home / Wardrobe 依赖这点） */
   onToggle?: (id: number) => void
+  /** 只在**只读模式**下生效：选择模式的卡片是 <label>，嵌 button 会连带勾选 */
+  onDelete?: (id: number) => void
 }
 
-export default function WardrobeGrid({ items, selectedIds, onToggle }: Props) {
+export default function WardrobeGrid({ items, selectedIds, onToggle, onDelete }: Props) {
   function card(item: Clothes) {
     return (
       <>
@@ -54,8 +56,21 @@ export default function WardrobeGrid({ items, selectedIds, onToggle }: Props) {
         {items.map((item) => (
           <div
             key={item.id}
-            className="bg-white rounded-lg shadow-sm border border-gray-100 overflow-hidden"
+            className="relative bg-white rounded-lg shadow-sm border border-gray-100 overflow-hidden"
           >
+            {onDelete && (
+              <button
+                type="button"
+                /* 与选择控件同理：可访问名里不能出现「T恤」这类语义字符串，
+                   否则页面测试的 getByText('T恤') 会多匹配而抛错 */
+                aria-label={`删除 ${item.category ?? '衣物'} ${item.id}`}
+                title="删除"
+                onClick={() => onDelete(item.id)}
+                className="absolute right-1 top-1 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-black/50 text-sm leading-none text-white hover:bg-black/70"
+              >
+                ×
+              </button>
+            )}
             {card(item)}
           </div>
         ))}

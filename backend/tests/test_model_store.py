@@ -8,6 +8,7 @@ import pytest_asyncio
 
 from storage.database import create_tables
 from storage.model_store import (
+    delete_model,
     get_default_model,
     get_model,
     list_models,
@@ -154,3 +155,67 @@ async def test_row_to_model_keeps_false_as_bool(db):
     payload = row_to_model(await get_model(db, second))
 
     assert payload["is_default"] is False
+
+
+# ---------- delete_model ----------
+
+async def test_delete_model_removes_the_row_and_returns_it(db):
+    """必须返回被删的行：调用方要拿 image_path 去删磁盘上的文件"""
+    model_id = await save_model(db, user_id=1, image_path="/uploads/a.jpg")
+
+    deleted = await delete_model(db, 1, model_id)
+
+    assert deleted["image_path"] == "/uploads/a.jpg"
+    assert await get_model(db, model_id) is None
+
+
+async def test_delete_model_returns_none_for_unknown_id(db):
+    assert await delete_model(db, 1, 999) is None
+
+
+async def test_delete_model_is_scoped_to_user(db):
+    theirs = await save_model(db, user_id=2, image_path="/uploads/b.jpg")
+
+    assert await delete_model(db, 1, theirs) is None
+    assert await get_model(db, theirs) is not None
+
+
+async def test_deleting_the_default_promotes_the_newest_remaining(db):
+    """否则一条默认标记都不剩：试穿靠 get_default_model 的回退才没坏，
+    但「默认」徽标全灭 —— 状态不该这么含糊"""
+    first = await save_model(db, user_id=1, image_path="/uploads/a.jpg")
+    second = await save_model(db, user_id=1, image_path="/uploads/b.jpg")
+
+    await delete_model(db, 1, first)  # first 是自动成为默认的那张
+
+    assert (await get_default_model(db, 1))["id"] == second
+    assert (await get_model(db, second))["is_default"] == 1
+
+
+async def test_deleting_a_non_default_leaves_the_default_alone(db):
+    first = await save_model(db, user_id=1, image_path="/uploads/a.jpg")
+    second = await save_model(db, user_id=1, image_path="/uploads/b.jpg")
+
+    await delete_model(db, 1, second)
+
+    assert (await get_default_model(db, 1))["id"] == first
+
+
+async def test_deleting_the_last_model_leaves_no_default(db):
+    """删到一张不剩时不该硬造默认 —— 试穿会走到 400「请先上传一张模特全身照」"""
+    only = await save_model(db, user_id=1, image_path="/uploads/a.jpg")
+
+    await delete_model(db, 1, only)
+
+    assert await get_default_model(db, 1) is None
+
+
+async def test_delete_model_only_promotes_within_the_same_user(db):
+    """补位查询必须带 user_id，否则会把别人的模特提成我的默认"""
+    mine = await save_model(db, user_id=1, image_path="/uploads/mine.jpg")
+    theirs = await save_model(db, user_id=2, image_path="/uploads/theirs.jpg")
+
+    await delete_model(db, 1, mine)
+
+    assert await get_default_model(db, 1) is None
+    assert (await get_default_model(db, 2))["id"] == theirs

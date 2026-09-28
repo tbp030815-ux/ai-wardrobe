@@ -88,4 +88,45 @@ describe('WardrobeGrid 选择模式（传了 onToggle）', () => {
     expect(screen.getByAltText('上衣')).toBeTruthy()
     expect(screen.getByText('T恤')).toBeTruthy()
   })
+
+  it('never renders delete controls — a button inside the label would toggle selection', () => {
+    // 整张卡片是 <label>，嵌套的 button 点下去会连带勾选/取消勾选。删除只在衣柜页提供
+    render(
+      <WardrobeGrid items={[shirt]} onToggle={() => {}} selectedIds={[]} onDelete={() => {}} />,
+    )
+
+    expect(screen.queryByLabelText('删除 上衣 1')).toBeNull()
+  })
+})
+
+describe('WardrobeGrid 只读模式 + onDelete', () => {
+  it('renders one delete control per item', () => {
+    render(<WardrobeGrid items={[shirt, shoes]} onDelete={() => {}} />)
+
+    expect(screen.getByLabelText('删除 上衣 1')).toBeTruthy()
+    expect(screen.getByLabelText('删除 鞋 2')).toBeTruthy()
+  })
+
+  it('reports the id of the item to delete', () => {
+    const onDelete = vi.fn()
+    render(<WardrobeGrid items={[shirt, shoes]} onDelete={onDelete} />)
+
+    fireEvent.click(screen.getByLabelText('删除 鞋 2'))
+
+    expect(onDelete).toHaveBeenCalledWith(2)
+  })
+
+  it('keeps the accessible name out of the semantic labels', () => {
+    // 与选择控件同理：名字里带「T恤」会让页面测试的 getByText('T恤') 多匹配而抛错
+    render(<WardrobeGrid items={[shirt]} onDelete={() => {}} />)
+
+    expect(screen.getByText('T恤')).toBeTruthy()
+  })
+
+  it('names the control with a fallback when the item was never recognized', () => {
+    const unknown: Clothes = { ...shirt, id: 9, category: null, sub_category: null, role: null }
+    render(<WardrobeGrid items={[unknown]} onDelete={() => {}} />)
+
+    expect(screen.getByLabelText('删除 衣物 9')).toBeTruthy()
+  })
 })

@@ -24,6 +24,17 @@ def make_png_bytes() -> bytes:
     return buf.getvalue()
 
 
+def count_rows(db_path, table: str) -> int:
+    """直接查库：只看 HTTP 响应的话，不删库的实现也能全绿"""
+
+    async def _count():
+        async with aiosqlite.connect(str(db_path)) as conn:
+            cursor = await conn.execute(f"SELECT COUNT(*) FROM {table}")
+            return (await cursor.fetchone())[0]
+
+    return asyncio.run(_count())
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     db_path = tmp_path / "test.db"
@@ -193,3 +204,44 @@ def test_wardrobe_item_detail(client):
 def test_wardrobe_detail_404_when_missing(client):
     response = client.get("/api/clothes/999")
     assert response.status_code == 404
+
+
+# ---------- DELETE /api/clothes/{id} ----------
+
+def upload_one(client, name="a.jpg"):
+    response = client.post(
+        "/api/upload", files={"file": (name, make_png_bytes(), "image/png")}
+    )
+    return response.json()["id"]
+
+
+def test_delete_clothes_removes_row_files_and_returns_the_row(client, tmp_path):
+    """传错的图必须能在 UI 里删掉；两个图片文件也要跟着走，否则只是换个地方堆垃圾"""
+    clothes_id = upload_one(client)
+    upload_dir = tmp_path / "uploads"
+    assert len(list(upload_dir.iterdir())) == 2  # 原图 + 抠图
+
+    response = client.delete(f"/api/clothes/{clothes_id}")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == clothes_id
+    assert list(upload_dir.iterdir()) == []
+    assert count_rows(tmp_path / "test.db", "clothes") == 0
+    assert client.get(f"/api/clothes/{clothes_id}").status_code == 404
+
+
+def test_delete_clothes_404_for_unknown_id(client):
+    response = client.delete("/api/clothes/999")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "衣物不存在"
+
+
+def test_delete_clothes_leaves_other_items_alone(client, tmp_path):
+    first = upload_one(client)
+    upload_one(client, "b.jpg")
+
+    client.delete(f"/api/clothes/{first}")
+
+    assert [item["id"] for item in client.get("/api/wardrobe").json()] == [2]
+    assert len(list((tmp_path / "uploads").iterdir())) == 2  # 第二件的原图 + 抠图

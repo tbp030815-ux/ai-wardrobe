@@ -1,6 +1,8 @@
 # AI 智能衣橱 — 技术方案总结
 
-> 最后更新：2026-09-26（阶段四已完成，含手工端到端联调与两轮 prompt 调优结论）
+> 最后更新：2026-09-28（补上三类删除端点：衣物 / 模特 / 试穿结果）
+>
+> 阶段四已完成，含手工端到端联调与两轮 prompt 调优结论（见第七节）
 
 ---
 
@@ -36,6 +38,9 @@ Seedream 已有参考图换装/局部重绘功能，虽然不如专业模型极�
 ---
 
 ## 三、目录结构
+
+> 本节是**最初的设计稿**，确实没按它建（`UploadModal.tsx` / `TryOnPanel.tsx` / `tryon_service.py` 都不存在）。
+> 实际结构以 `CLAUDE.md` 的「目录结构」为准，差异也记在第七节各阶段末尾。
 
 ```
 ai-cloth/
@@ -139,8 +144,8 @@ CREATE TABLE outfits (
 | POST | /api/upload | 上传图片（触发抠图 + 识别） |
 | GET | /api/wardrobe | 获取衣柜列表（支持筛选） |
 | GET | /api/clothes/:id | 获取衣物详情 |
-| PUT | /api/clothes/:id | 编辑标签/分类 |
-| DELETE | /api/clothes/:id | 删除衣物 |
+| PUT | /api/clothes/:id | 编辑标签/分类 ❌ 未实现 |
+| DELETE | /api/clothes/:id | 删除衣物 ✅ 已实现（连磁盘上的原图 + 抠图一起删） |
 
 ### 5.2 模特管理
 
@@ -149,6 +154,7 @@ CREATE TABLE outfits (
 | POST | /api/model | 上传模特全身照 |
 | GET | /api/models | 获取模特列表 |
 | PUT | /api/models/:id/default | 设为默认模特 |
+| DELETE | /api/models/:id | 删除模特照 ✅ 已实现（删掉默认模特时自动把最新一张提为默认） |
 
 ### 5.3 穿搭推荐
 
@@ -163,7 +169,12 @@ CREATE TABLE outfits (
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | /api/tryon?model_id=1&cloth_ids=[2,3,4] | 合成试穿效果图 |
+| POST | /api/tryon | 合成试穿效果图 |
+| GET | /api/outfits?limit=20 | 试穿历史 |
+| DELETE | /api/outfits/:id | 删除一次试穿记录 ✅ 已实现（连结果图一起删） |
+
+> 注：试穿**不是** query 参数——实际接收 JSON body `{"model_id": 1, "clothes_ids": [2, 3, 4]}`，
+> `model_id` 可省略（用默认模特）。衣物 id 字段名是 `clothes_ids` 而非 `cloth_ids`。
 
 ### 5.5 配置
 
@@ -302,6 +313,20 @@ POST /api/tryon   {model_id?, clothes_ids: [...]}  → Outfit + warnings
 GET  /api/outfits?limit=N                          → Outfit[]
 ```
 
+**删除管理**（阶段四收尾补做，原设计没排进来）：结果图是按 MB 计的，而试穿一次就产一张，
+累积速度约是衣物的 10 倍。三类删除一起补：
+
+```python
+# 后端 api/{wardrobe,model,tryon}.py —— 统一三步
+#   1. DELETE ... RETURNING *  一次往返原子地拿到被删的行（还要拿路径去删文件）
+#   2. 行不存在 → 404「衣物/模特/试穿记录不存在」，不删任何文件
+#   3. 再删磁盘文件：uploads_store.delete_upload_files 尽力而为，删不掉也不让请求失败
+
+DELETE /api/clothes/:id   → Clothes    # 原图 + 抠图 PNG
+DELETE /api/models/:id    → Model      # 删掉的若是默认模特，同一事务里把最新一张提为默认
+DELETE /api/outfits/:id   → Outfit     # 结果图
+```
+
 **验收标准**：
 - ✅ 输入模特照 + 衣物原图 → 返回合成效果图
 - ⚠️ 「姿势不变」**未达成** —— 参考衣物与手臂区域重叠时手臂会漂（见下方已知限制）
@@ -320,6 +345,11 @@ GET  /api/outfits?limit=N                          → Outfit[]
 - 新增 `UpstreamError(status_code, ...)`：原有客户端把状态码压进错误字符串，
   而试穿需要 **429 透传**让前端区分「稍后再试」和「彻底坏了」
 - `generated_by` 写实际的图像模型 id，不写字面量 `'seedream'`
+- **新增 `storage/uploads_store.py`**：`/uploads/...` URL → 磁盘路径的唯一入口。
+  试穿原本用 `Path(url).name` 取文件名，而结果图在 `uploads/tryon/` 子目录下——
+  取 `.name` 会把子目录丢掉，指向一个不存在的文件。删除功能正好需要这条路径映射，一并收口
+- **不返回 204**：前端 `request<T>` 一律 `response.json()`，空响应体会解析失败，
+  三个删除端点都返回被删的那一行
 
 **三条产品级限制**（实测得出，别再往 prompt 里投入）：
 

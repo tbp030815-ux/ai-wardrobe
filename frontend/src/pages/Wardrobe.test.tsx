@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Clothes } from '../types'
 import * as client from '../api/client'
@@ -37,6 +37,8 @@ async function renderLoaded(items: Clothes[] = []) {
 beforeEach(() => {
   vi.mocked(client.fetchWardrobe).mockResolvedValue([])
   vi.mocked(client.uploadClothes).mockReset()
+  vi.mocked(client.deleteClothes).mockResolvedValue(shirt)
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
 
 afterEach(() => {
@@ -123,5 +125,49 @@ describe('Wardrobe', () => {
     render(<Wardrobe />)
 
     expect(await screen.findAllByText('未识别')).toBeTruthy()
+  })
+})
+
+describe('Wardrobe 删除衣物', () => {
+  it('asks before deleting and does nothing when the user cancels', async () => {
+    await renderLoaded([shirt])
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+
+    fireEvent.click(screen.getByLabelText('删除 上衣 1'))
+
+    expect(confirm).toHaveBeenCalled()
+    expect(client.deleteClothes).not.toHaveBeenCalled()
+    expect(screen.getByText('T恤')).toBeTruthy()
+  })
+
+  it('removes the item after confirmation', async () => {
+    // 传错的图（模特挡脸、购物 App 带水印的图）能在 UI 里删掉，不用去翻数据库
+    await renderLoaded([shirt])
+
+    fireEvent.click(screen.getByLabelText('删除 上衣 1'))
+
+    await waitFor(() => expect(client.deleteClothes).toHaveBeenCalledWith(1))
+    expect(await screen.findByText(EMPTY_HINT)).toBeTruthy()
+  })
+
+  it('keeps the item and shows the server message when deletion fails', async () => {
+    vi.mocked(client.deleteClothes).mockRejectedValue(new Error('衣物不存在'))
+    await renderLoaded([shirt])
+
+    fireEvent.click(screen.getByLabelText('删除 上衣 1'))
+
+    expect(await screen.findByText('衣物不存在')).toBeTruthy()
+    expect(screen.getByText('T恤')).toBeTruthy()
+  })
+
+  it('ignores a second click while the first delete is still in flight', async () => {
+    // 第二次请求会拿到 404「衣物不存在」，用户看到的是一个莫名其妙的报错
+    vi.mocked(client.deleteClothes).mockReturnValue(new Promise(() => {}))
+    await renderLoaded([shirt])
+
+    fireEvent.click(screen.getByLabelText('删除 上衣 1'))
+    fireEvent.click(screen.getByLabelText('删除 上衣 1'))
+
+    expect(client.deleteClothes).toHaveBeenCalledTimes(1)
   })
 })

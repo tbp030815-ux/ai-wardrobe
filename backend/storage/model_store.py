@@ -93,6 +93,40 @@ async def list_models(db: aiosqlite.Connection, user_id: int) -> list[aiosqlite.
     return await cursor.fetchall()
 
 
+async def delete_model(
+    db: aiosqlite.Connection, user_id: int, model_id: int
+) -> aiosqlite.Row | None:
+    """删除模特，返回**被删的那一行**；id 不存在或不属于该用户时返回 None。
+
+    删掉的若是默认模特，把该用户**最新的一张提为默认**：否则一条默认标记都不剩，
+    试穿靠 `get_default_model` 的回退才没坏，但前端的「默认」徽标全灭，状态含糊。
+    删到一张不剩时不硬造默认（子查询为 NULL，UPDATE 匹配不到行），
+    让试穿走到 400「请先上传一张模特全身照」。
+    """
+    cursor = await db.execute(
+        "DELETE FROM models WHERE id = ? AND user_id = ? RETURNING *",
+        (model_id, user_id),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        await db.commit()
+        return None
+
+    if row["is_default"]:
+        # 补位查询必须带 user_id，否则会把别人的模特提成我的默认
+        await db.execute(
+            """
+            UPDATE models SET is_default = 1
+            WHERE user_id = ? AND id = (
+                SELECT id FROM models WHERE user_id = ? ORDER BY id DESC LIMIT 1
+            )
+            """,
+            (user_id, user_id),
+        )
+    await db.commit()
+    return row
+
+
 def row_to_model(row: aiosqlite.Row) -> dict:
     """把 DB 行转成出参字典。
 

@@ -10,6 +10,7 @@ import pytest_asyncio
 
 from storage.database import create_tables
 from storage.outfits_store import (
+    delete_outfit,
     get_outfit,
     list_outfits,
     row_to_outfit,
@@ -117,3 +118,37 @@ async def test_list_outfits_is_scoped_to_user(db):
     await save_sample(db, user_id=2)
 
     assert len(await list_outfits(db, 1)) == 1
+
+
+# ---------- delete_outfit ----------
+
+async def test_delete_outfit_removes_the_row_and_returns_it(db):
+    """必须返回被删的行：调用方要拿 result_image_url 去删磁盘上的结果图，
+    那才是「结果图持续累积」的解药"""
+    outfit_id = await save_sample(db)
+
+    deleted = await delete_outfit(db, 1, outfit_id)
+
+    assert deleted["result_image_url"] == "/uploads/tryon/abc.jpg"
+    assert await get_outfit(db, outfit_id) is None
+
+
+async def test_delete_outfit_returns_none_for_unknown_id(db):
+    assert await delete_outfit(db, 1, 999) is None
+
+
+async def test_delete_outfit_is_scoped_to_user(db):
+    theirs = await save_sample(db, user_id=2)
+
+    assert await delete_outfit(db, 1, theirs) is None
+    assert await get_outfit(db, theirs) is not None
+
+
+async def test_delete_outfit_leaves_other_rows_alone(db):
+    keep = await save_sample(db, clothes_ids=(1,))
+    drop = await save_sample(db, clothes_ids=(2,))
+
+    assert await delete_outfit(db, 1, drop) is not None
+
+    rows = await list_outfits(db, 1)
+    assert [row["id"] for row in rows] == [keep]

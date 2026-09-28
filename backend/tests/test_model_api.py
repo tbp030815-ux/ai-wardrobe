@@ -179,3 +179,46 @@ def test_set_default_404_keeps_existing_default(client):
 
     models = client.get("/api/models").json()
     assert [row["id"] for row in models if row["is_default"]] == [first]
+
+
+# ---------- DELETE /api/models/{id} ----------
+
+def test_delete_model_removes_record_and_file(client, tmp_path):
+    """传错的模特照必须能在 UI 里删掉，图片文件也要跟着走"""
+    model_id = upload(client).json()["id"]
+    assert len(list((tmp_path / "uploads").iterdir())) == 1
+
+    response = client.delete(f"/api/models/{model_id}")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == model_id
+    assert response.json()["is_default"] is True  # 出参必须是真 bool，不是 1
+    assert list((tmp_path / "uploads").iterdir()) == []
+    assert client.get("/api/models").json() == []
+
+
+def test_delete_model_404_for_unknown_id(client):
+    response = client.delete("/api/models/999")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "模特不存在"
+
+
+def test_delete_model_promotes_the_newest_remaining(client):
+    """删掉默认模特后必须有人补位：否则「默认」徽标全灭，用户不知道该用哪张"""
+    first = upload(client).json()["id"]
+    second = upload(client, "second.jpg").json()["id"]
+
+    client.delete(f"/api/models/{first}")
+
+    models = client.get("/api/models").json()
+    assert [(row["id"], row["is_default"]) for row in models] == [(second, True)]
+
+
+def test_delete_model_leaves_other_files_alone(client, tmp_path):
+    first = upload(client).json()["id"]
+    upload(client, "second.jpg")
+
+    client.delete(f"/api/models/{first}")
+
+    assert len(list((tmp_path / "uploads").iterdir())) == 1

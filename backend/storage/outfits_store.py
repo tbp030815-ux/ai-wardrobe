@@ -55,6 +55,23 @@ async def list_outfits(
     return await cursor.fetchall()
 
 
+async def delete_outfit(
+    db: aiosqlite.Connection, user_id: int, outfit_id: int
+) -> aiosqlite.Row | None:
+    """删除一次试穿记录，返回**被删的那一行**；id 不存在或不属于该用户时返回 None。
+
+    结果图是按 MB 计的，这张删除才是「结果图持续累积」的解药 ——
+    调用方要拿 result_image_url 去删磁盘上的文件。
+    """
+    cursor = await db.execute(
+        "DELETE FROM outfits WHERE id = ? AND user_id = ? RETURNING *",
+        (outfit_id, user_id),
+    )
+    row = await cursor.fetchone()
+    await db.commit()
+    return row
+
+
 def _parse_clothes_ids(raw: str | None) -> list[int]:
     """TEXT 列 → 数组。任何读不出来的情况都退化成空数组，不让响应 500"""
     if not raw:

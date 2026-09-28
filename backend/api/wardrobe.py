@@ -1,12 +1,14 @@
 """
-衣柜查询 API
+衣柜查询 / 删除 API
 """
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
 
+from config import Settings, get_settings
 from services.garment_roles import CATEGORY_ROLE
-from storage.clothes_store import get_clothes, list_clothes
+from storage.clothes_store import delete_clothes, get_clothes, list_clothes
 from storage.database import get_db
+from storage.uploads_store import delete_upload_files
 
 router = APIRouter()
 
@@ -32,4 +34,24 @@ async def clothes_detail(
     row = await get_clothes(db, clothes_id)
     if row is None:
         raise HTTPException(status_code=404, detail="衣物不存在")
+    return dict(row)
+
+
+@router.delete("/api/clothes/{clothes_id}")
+async def clothes_delete(
+    clothes_id: int,
+    user_id: int = 1,
+    db: aiosqlite.Connection = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """删除衣物：先删库、再删磁盘上的两个文件。
+
+    顺序不能反 —— 先删文件而删库失败，会留下一行指向不存在图片的记录，
+    衣柜页上就是一个永远加载不出来的破图。反过来最坏只是留个孤儿文件。
+    """
+    row = await delete_clothes(db, user_id, clothes_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="衣物不存在")
+
+    delete_upload_files(settings.upload_dir, [row["image_path"], row["cropped_path"]])
     return dict(row)

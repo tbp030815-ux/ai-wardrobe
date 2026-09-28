@@ -1,5 +1,5 @@
 import { type ChangeEvent, useCallback, useEffect, useRef, useState } from 'react'
-import { fetchWardrobe, uploadClothes } from '../api/client'
+import { deleteClothes, fetchWardrobe, uploadClothes } from '../api/client'
 import WardrobeGrid from '../components/WardrobeGrid'
 import type { Clothes } from '../types'
 
@@ -13,6 +13,8 @@ export default function Wardrobe() {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // 删除在飞行中时挡掉第二次点击：第二次请求会拿到 404，用户看到的是一句莫名其妙的报错
+  const deletingRef = useRef(false)
 
   const load = useCallback(async () => {
     try {
@@ -43,6 +45,23 @@ export default function Wardrobe() {
       setError(messageOf(err, '上传失败'))
     } finally {
       setUploading(false)
+    }
+  }
+
+  async function handleDelete(id: number) {
+    if (deletingRef.current) return
+    // 删了就找不回来了，图片文件也一起没：先问一句
+    if (!window.confirm('删除这件衣物？图片文件也会一起删掉，无法恢复。')) return
+
+    deletingRef.current = true
+    setError(null)
+    try {
+      await deleteClothes(id)
+      setItems((prev) => prev.filter((item) => item.id !== id))
+    } catch (err) {
+      setError(messageOf(err, '删除失败'))
+    } finally {
+      deletingRef.current = false
     }
   }
 
@@ -90,7 +109,7 @@ export default function Wardrobe() {
           暂无衣物，点击右上角添加
         </div>
       ) : (
-        <WardrobeGrid items={items} />
+        <WardrobeGrid items={items} onDelete={handleDelete} />
       )}
     </div>
   )

@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Clothes, Model, Outfit, Recommendation } from '../types'
 import {
+  deleteClothes,
+  deleteModel,
+  deleteOutfit,
   fetchModels,
   fetchOutfits,
   fetchRecommendation,
@@ -281,5 +284,60 @@ describe('fetchOutfits', () => {
     await fetchOutfits(5)
 
     expect(spy.mock.calls[0][0]).toBe('/api/outfits?limit=5')
+  })
+})
+
+describe('deleteClothes', () => {
+  it('DELETEs /api/clothes/{id}', async () => {
+    const spy = stubFetch(async () => jsonResponse(sampleClothes))
+
+    const result = await deleteClothes(3)
+
+    expect(result).toEqual(sampleClothes)
+    expect(spy.mock.calls[0][0]).toBe('/api/clothes/3')
+    expect(spy.mock.calls[0][1]?.method).toBe('DELETE')
+  })
+
+  it('surfaces the server message when the item is already gone', async () => {
+    // 后端返回 JSON 而不是 204：request() 一律 response.json()，空响应体会解析失败
+    stubFetch(async () => jsonResponse({ detail: '衣物不存在' }, 404))
+
+    await expect(deleteClothes(999)).rejects.toThrow('衣物不存在')
+  })
+})
+
+describe('deleteModel', () => {
+  it('DELETEs /api/models/{id}', async () => {
+    const spy = stubFetch(async () => jsonResponse(sampleModel))
+
+    const result = await deleteModel(1)
+
+    expect(result).toEqual(sampleModel)
+    expect(spy.mock.calls[0][0]).toBe('/api/models/1')
+    expect(spy.mock.calls[0][1]?.method).toBe('DELETE')
+  })
+
+  it('surfaces the server message when the model is already gone', async () => {
+    stubFetch(async () => jsonResponse({ detail: '模特不存在' }, 404))
+
+    await expect(deleteModel(999)).rejects.toThrow('模特不存在')
+  })
+})
+
+describe('deleteOutfit', () => {
+  it('DELETEs /api/outfits/{id}', async () => {
+    const spy = stubFetch(async () => jsonResponse(sampleOutfit))
+
+    const result = await deleteOutfit(7)
+
+    expect(result).toEqual(sampleOutfit)
+    expect(spy.mock.calls[0][0]).toBe('/api/outfits/7')
+    expect(spy.mock.calls[0][1]?.method).toBe('DELETE')
+  })
+
+  it('surfaces the server message when the result is already gone', async () => {
+    stubFetch(async () => jsonResponse({ detail: '试穿记录不存在' }, 404))
+
+    await expect(deleteOutfit(999)).rejects.toThrow('试穿记录不存在')
   })
 })

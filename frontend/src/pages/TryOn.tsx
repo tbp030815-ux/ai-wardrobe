@@ -1,6 +1,8 @@
 import { type ChangeEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
+  deleteModel,
+  deleteOutfit,
   fetchModels,
   fetchOutfits,
   fetchWardrobe,
@@ -42,6 +44,8 @@ export default function TryOn() {
   const modelInputRef = useRef<HTMLInputElement>(null)
   const appliedParamRef = useRef(false)
   const cancelledRef = useRef(false)
+  // 删除在飞行中时挡掉第二次点击：第二次请求会拿到 404，用户看到的是一句莫名其妙的报错
+  const deletingRef = useRef(false)
 
   const [searchParams] = useSearchParams()
 
@@ -183,6 +187,48 @@ export default function TryOn() {
     setSelectedIds(ids.filter((id) => items.some((item) => item.id === id)))
   }
 
+  /** 删除模特照。删掉的可能是当前选中的那张，所以删完要跟服务端对齐 */
+  async function handleDeleteModel(id: number) {
+    if (deletingRef.current) return
+    if (!window.confirm('删除这张模特照？图片文件也会一起删掉，无法恢复。')) return
+
+    deletingRef.current = true
+    setError(null)
+    try {
+      await deleteModel(id)
+      // 重新拉列表而不是本地 filter：删掉的若是默认模特，补位是服务端在同一事务里做的，
+      // 前端自己算一份迟早和后端对不上
+      const list = await fetchModels()
+      setModels(list)
+      // 用户显式选过的模特还在就留着，没了才回落到新的默认
+      setModelId((prev) =>
+        prev !== null && list.some((item) => item.id === prev)
+          ? prev
+          : (list.find((item) => item.is_default)?.id ?? null),
+      )
+    } catch (err) {
+      setError(messageOf(err, '删除模特照失败'))
+    } finally {
+      deletingRef.current = false
+    }
+  }
+
+  async function handleDeleteResult(id: number) {
+    if (deletingRef.current) return
+    if (!window.confirm('删除这张试穿结果？图片文件也会一起删掉，无法恢复。')) return
+
+    deletingRef.current = true
+    setError(null)
+    try {
+      await deleteOutfit(id)
+      setResults((prev) => prev.filter((result) => result.id !== id))
+    } catch (err) {
+      setError(messageOf(err, '删除试穿结果失败'))
+    } finally {
+      deletingRef.current = false
+    }
+  }
+
   const selectedItems = selectedIds
     .map((id) => items.find((item) => item.id === id))
     .filter((item): item is Clothes => Boolean(item))
@@ -228,24 +274,35 @@ export default function TryOn() {
           </p>
         ) : (
           <div className="flex gap-3 overflow-x-auto">
+            {/* 外层 div 只为定位删除按钮：button 不能套 button，删除键必须是选中键的兄弟节点 */}
             {models.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                aria-label={`模特 ${item.id}`}
-                aria-pressed={item.id === modelId}
-                onClick={() => setModelId(item.id)}
-                className={`relative shrink-0 overflow-hidden rounded-lg border-2 ${
-                  item.id === modelId ? 'border-indigo-500' : 'border-transparent'
-                }`}
-              >
-                <img src={item.image_path} alt="" className="h-28 w-auto object-cover" />
-                {item.is_default && (
-                  <span className="absolute inset-x-0 bottom-0 bg-black/50 text-center text-[10px] text-white">
-                    默认
-                  </span>
-                )}
-              </button>
+              <div key={item.id} className="relative shrink-0">
+                <button
+                  type="button"
+                  aria-label={`模特 ${item.id}`}
+                  aria-pressed={item.id === modelId}
+                  onClick={() => setModelId(item.id)}
+                  className={`relative block overflow-hidden rounded-lg border-2 ${
+                    item.id === modelId ? 'border-indigo-500' : 'border-transparent'
+                  }`}
+                >
+                  <img src={item.image_path} alt="" className="h-28 w-auto object-cover" />
+                  {item.is_default && (
+                    <span className="absolute inset-x-0 bottom-0 bg-black/50 text-center text-[10px] text-white">
+                      默认
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  aria-label={`删除模特 ${item.id}`}
+                  title="删除"
+                  onClick={() => void handleDeleteModel(item.id)}
+                  className="absolute right-1 top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-black/50 text-xs leading-none text-white hover:bg-black/70"
+                >
+                  ×
+                </button>
+              </div>
             ))}
           </div>
         )}
@@ -341,13 +398,23 @@ export default function TryOn() {
               <div className="p-3 space-y-2">
                 <div className="flex justify-between items-center text-xs text-gray-500">
                   <span>{result.created_at}</span>
-                  <button
-                    type="button"
-                    onClick={() => reselect(result.clothes_ids)}
-                    className="text-indigo-600 hover:text-indigo-800"
-                  >
-                    改用这几件
-                  </button>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => reselect(result.clothes_ids)}
+                      className="text-indigo-600 hover:text-indigo-800"
+                    >
+                      改用这几件
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`删除试穿结果 ${result.id}`}
+                      onClick={() => void handleDeleteResult(result.id)}
+                      className="text-gray-400 hover:text-red-600"
+                    >
+                      删除
+                    </button>
+                  </div>
                 </div>
                 {result.warnings.map((warning) => (
                   <p key={warning} className="text-xs text-amber-700">

@@ -79,6 +79,10 @@ beforeEach(() => {
   // 而 clearAllMocks 只清调用记录、不清实现，漏掉的实现会泄漏到下一个用例
   vi.mocked(client.generateTryOn).mockResolvedValue(outfit(100, [1]))
   vi.mocked(client.uploadModel).mockResolvedValue(model)
+  vi.mocked(client.deleteModel).mockResolvedValue(model)
+  vi.mocked(client.deleteOutfit).mockResolvedValue(outfit(1, []))
+  // 删除一律先弹确认框；不 stub 的话 jsdom 的 window.confirm 返回 undefined（等同取消）
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
 
 afterEach(() => {
@@ -342,6 +346,96 @@ describe('TryOn 历史记录', () => {
 
     expect(screen.getByLabelText('选择 上衣 2')).toHaveProperty('checked', true)
     expect(screen.getByLabelText('选择 下装 3')).toHaveProperty('checked', true)
+  })
+})
+
+describe('TryOn 删除模特照', () => {
+  it('asks before deleting and does nothing when the user cancels', async () => {
+    await renderLoaded()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+
+    fireEvent.click(screen.getByLabelText('删除模特 1'))
+
+    expect(confirm).toHaveBeenCalled()
+    expect(client.deleteModel).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('模特 1')).toBeTruthy()
+  })
+
+  it('deletes the model and follows the server when the default is promoted', async () => {
+    // 删掉的正是默认模特：补位由服务端在同一事务里做，前端重新拉一次而不是自己算，
+    // 否则「默认」徽标和下次试穿用的模特会对不上
+    vi.mocked(client.fetchModels)
+      .mockResolvedValueOnce([model, otherModel])
+      .mockResolvedValueOnce([{ ...otherModel, is_default: true }])
+    await renderLoaded()
+
+    fireEvent.click(screen.getByLabelText('删除模特 1'))
+
+    await waitFor(() => expect(client.deleteModel).toHaveBeenCalledWith(1))
+    expect(screen.queryByLabelText('模特 1')).toBeNull()
+    expect(screen.getByLabelText('模特 2').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('keeps the model and shows the server message when deletion fails', async () => {
+    vi.mocked(client.deleteModel).mockRejectedValue(new Error('模特不存在'))
+    await renderLoaded()
+
+    fireEvent.click(screen.getByLabelText('删除模特 1'))
+
+    expect(await screen.findByText('模特不存在')).toBeTruthy()
+    expect(screen.getByLabelText('模特 1')).toBeTruthy()
+  })
+
+  it('keeps the currently chosen model when another one is deleted', async () => {
+    const third: Model = { ...model, id: 3, image_path: '/uploads/m3.jpg', is_default: false }
+    vi.mocked(client.fetchModels)
+      .mockResolvedValueOnce([model, otherModel, third])
+      .mockResolvedValueOnce([model, third]) // 删掉的是 2 号，用户挑的 3 号还在
+    await renderLoaded()
+    fireEvent.click(screen.getByLabelText('模特 3')) // 用户显式选了第三张
+
+    fireEvent.click(screen.getByLabelText('删除模特 2'))
+
+    await waitFor(() => expect(client.deleteModel).toHaveBeenCalledWith(2))
+    expect(screen.queryByLabelText('模特 2')).toBeNull()
+    expect(screen.getByLabelText('模特 3').getAttribute('aria-pressed')).toBe('true')
+  })
+})
+
+describe('TryOn 删除试穿结果', () => {
+  it('asks before deleting and does nothing when the user cancels', async () => {
+    vi.mocked(client.fetchOutfits).mockResolvedValue([outfit(7, [1])])
+    await renderLoaded()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+
+    fireEvent.click(screen.getByLabelText('删除试穿结果 7'))
+
+    expect(confirm).toHaveBeenCalled()
+    expect(client.deleteOutfit).not.toHaveBeenCalled()
+    expect(screen.getByAltText('试穿结果 7')).toBeTruthy()
+  })
+
+  it('removes only the deleted result', async () => {
+    // 结果图是按 MB 计的，这条路径是结果图持续累积的解药
+    vi.mocked(client.fetchOutfits).mockResolvedValue([outfit(7, [1]), outfit(8, [3])])
+    await renderLoaded()
+
+    fireEvent.click(screen.getByLabelText('删除试穿结果 7'))
+
+    await waitFor(() => expect(client.deleteOutfit).toHaveBeenCalledWith(7))
+    await waitFor(() => expect(screen.queryByAltText('试穿结果 7')).toBeNull())
+    expect(screen.getByAltText('试穿结果 8')).toBeTruthy()
+  })
+
+  it('keeps the result and shows the server message when deletion fails', async () => {
+    vi.mocked(client.fetchOutfits).mockResolvedValue([outfit(7, [1])])
+    vi.mocked(client.deleteOutfit).mockRejectedValue(new Error('试穿记录不存在'))
+    await renderLoaded()
+
+    fireEvent.click(screen.getByLabelText('删除试穿结果 7'))
+
+    expect(await screen.findByText('试穿记录不存在')).toBeTruthy()
+    expect(screen.getByAltText('试穿结果 7')).toBeTruthy()
   })
 })
 

@@ -51,10 +51,10 @@ backend/
 ├── config.py                  # Settings（读 .env）
 ├── api/
 │   ├── upload.py              # POST /api/upload（抠图 → 识别 → 入库）
-│   ├── wardrobe.py            # GET /api/wardrobe, GET /api/clothes/{id}
+│   ├── wardrobe.py            # GET /api/wardrobe, GET /api/clothes/{id}, DELETE /api/clothes/{id}
 │   ├── recommendation.py      # GET /api/recommendation（天气 + 穿搭推荐）
-│   ├── model.py               # POST /api/model, GET /api/models, PUT /api/models/{id}/default
-│   └── tryon.py               # POST /api/tryon, GET /api/outfits
+│   ├── model.py               # POST /api/model, GET /api/models, PUT /api/models/{id}/default, DELETE /api/models/{id}
+│   └── tryon.py               # POST /api/tryon, GET /api/outfits, DELETE /api/outfits/{id}
 ├── services/
 │   ├── background_removal.py  # rembg 本地抠图
 │   ├── seedream_client.py     # 火山方舟 API 客户端（识图 + 文本对话 + 图像生成）
@@ -66,7 +66,8 @@ backend/
 │   ├── database.py            # SQLite 连接 & 建表
 │   ├── clothes_store.py       # 衣物数据访问
 │   ├── model_store.py         # 模特数据访问（is_default 记账）
-│   └── outfits_store.py       # 试穿记录（clothes_ids JSON 的读写）
+│   ├── outfits_store.py       # 试穿记录（clothes_ids JSON 的读写）
+│   └── uploads_store.py       # /uploads URL → 磁盘路径 + 尽力删除文件
 ├── tests/                     # pytest
 ├── uploads/                   # 上传图片存储（uploads/tryon/ 存生成结果）
 ├── requirements.txt           # 运行时依赖
@@ -76,7 +77,7 @@ frontend/
 ├── src/types.ts               # Clothes / Model / Outfit / TryOnResult
 ├── src/api/client.ts          # fetch 封装
 ├── src/pages/                 # Home / Wardrobe / TryOn（三个页面均已对接后端）
-├── src/components/            # WardrobeGrid（可选选中模式）
+├── src/components/            # WardrobeGrid（可选选中模式 + 只读模式下的删除按钮）
 ├── src/utils/                 # tryonIds.ts / variants.ts（纯函数，重点单测）
 └── vite.config.ts             # 代理 /api + /uploads
 PLAN.md                        # 完整技术方案（开发计划、API 设计、数据库表）
@@ -155,6 +156,29 @@ GET  /api/outfits?limit=20
 - 结果图写 `uploads/tryon/{uuid}.jpg`（JPEG 不写 PNG：2K PNG 3-6MB / JPEG q88 约 400KB），扩展名由 `guess_mime` 推导
 - 前端「对比生成」：每个变体每个部位只放一件（同部位多件会被后端按 id 平局规则丢掉一件），笛卡尔积超 4 就只变单品最多的那个角色
 
+## 删除接口（阶段四）
+
+```
+DELETE /api/clothes/{id}    → Clothes    # 原图 + 抠图 PNG 一起删
+DELETE /api/models/{id}     → Model      # 删掉的若是默认模特，同一事务里把最新一张提为默认
+DELETE /api/outfits/{id}    → Outfit     # 结果图（在 uploads/tryon/ 下）
+```
+
+| 情况 | 行为 |
+|---|---|
+| 正常 | 200，返回**被删的那一行** JSON |
+| id 不存在 / 不属于该用户 | 404 + 中文文案，不碰任何文件 |
+
+- **先删库、再删文件，顺序不能反**：反过来的话删库失败会留下指向不存在图片的记录（衣柜页上一个永远加载不出来的破图）；现在最坏只是留个孤儿文件
+- **文件删不掉不影响响应**：`delete_upload_files` 刻意不抛异常。Windows 上文件被占用是常见情形，为此让整个请求报错、或回滚已成功的删除，都比留个孤儿文件更糟
+- **不返回 204**：前端 `request<T>` 一律 `response.json()`，空响应体会解析失败
+- 三条删除都用 `DELETE ... RETURNING *`：一次往返原子地拿到被删行（调用方要拿路径去删文件，删完再查就查不到了），`AND user_id = ?` 顺带完成越权校验
+- **删默认模特必须补位**，否则一条默认标记都不剩 —— 试穿靠 `get_default_model` 的回退才没坏，但前端「默认」徽标全灭，状态含糊。删到一张不剩时不硬造默认
+- 前端删除一律 `window.confirm` 二次确认；删除在飞行中时用 `useRef` 挡掉第二次点击（第二次请求会拿到 404，用户看到的是一句莫名其妙的报错）
+- **删除按钮只在衣柜页的只读网格里渲染**：选择模式的卡片整体是 `<label>`，嵌 `button` 点下去会连带勾选/取消勾选。试穿页的模特删除另起了一个兄弟节点（`button` 不能套 `button`）
+- 删模特后前端**重新拉 `/api/models`**，不本地 filter：默认补位是服务端做的，前端自己算一份迟早和后端对不上
+- **已知边界**：删衣物不会清理历史 `outfits.clothes_ids` 里残留的 id（表上无外键），那条历史的「改用这几件」会 404 并列出缺失 id
+
 ## 三条产品级限制（实测得出，别再往 prompt 里投入）
 
 根因：Seedream 是**整图重绘**的通用图像编辑模型，缺三样专用试穿模型（IDM-VTON 那类）天生就有的东西 —— mask（mask 外像素原样拷回）、pose 条件分支、garment 编码器。「哪些像素不能变」只能靠 prompt 软引导，而 prompt 对扩散采样器是**概率性**约束，不是硬约束。
@@ -172,7 +196,8 @@ GET  /api/outfits?limit=20
 - ✅ 阶段一：前后端骨架跑通
 - ✅ 阶段二：抠图 + 衣物识别 + 前端衣柜页对接，真实 API 联调通过
 - ✅ 阶段三：穿搭推荐（Open-Meteo 天气 + 规则/LLM 混合推荐 + 前端今日推荐页），后端 100 / 前端 25 测试全绿，真实端到端联调通过
-- ✅ 阶段四：AI 试穿（模特管理 + 自由勾选多件 + 对比生成 + 历史记录 + 推荐页「试穿这套」联动），后端 207 / 前端 95 测试全绿。手工端到端 7 步联调已跑完（约 ¥1.8）。**已知限制：遮挡导致手臂漂、参考图水印偶发传染、输出抖动**，见上文
+- ✅ 阶段四：AI 试穿（模特管理 + 自由勾选多件 + 对比生成 + 历史记录 + 推荐页「试穿这套」联动），后端 241 / 前端 117 测试全绿。手工端到端 7 步联调已跑完（约 ¥1.8）。**已知限制：遮挡导致手臂漂、参考图水印偶发传染、输出抖动**，见上文
+- ✅ 阶段四补：三类删除端点（衣物 / 模特 / 试穿结果）+ 前端二次确认，见上文「删除接口」
 - ⏳ 阶段五：用户认证、Docker 部署、国际化
-- ⏳ **阶段四待办**：试穿结果删除管理（结果图持续累积）；`models` / `clothes` 都没有 DELETE 端点（传错图无法在 UI 里删）；503 文案把上游 401 JSON 原样吐给用户（含 request id）；衣物上传处缺「建议用自己拍的照片，购物 App 下载的图常带水印」提示；模特体型识别（`height_cm` / `body_type` 仍为 NULL）；浏览器内验证（第 6 步）
+- ⏳ **阶段四待办**：503 文案把上游 401 JSON 原样吐给用户（含 request id）；衣物上传处缺「建议用自己拍的照片，购物 App 下载的图常带水印」提示；模特体型识别（`height_cm` / `body_type` 仍为 NULL）；浏览器内验证（第 6 步）；删除功能的真机验证
 - 完整路线图见 `PLAN.md`

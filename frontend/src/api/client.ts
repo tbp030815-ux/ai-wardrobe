@@ -78,3 +78,18 @@ export async function fetchOutfits(limit?: number): Promise<Outfit[]> {
   const query = limit === undefined ? '' : `?limit=${limit}`
   return request<Outfit[]>(`/api/outfits${query}`)
 }
+
+/* 三个删除端点都会删掉磁盘上的图片文件，且**返回被删的那一行 JSON**：
+   request() 一律 response.json()，后端要是回 204 空响应体，这里会解析失败。 */
+
+export async function deleteClothes(clothesId: number): Promise<Clothes> {
+  return request<Clothes>(`/api/clothes/${clothesId}`, { method: 'DELETE' })
+}
+
+export async function deleteModel(modelId: number): Promise<Model> {
+  return request<Model>(`/api/models/${modelId}`, { method: 'DELETE' })
+}
+
+export async function deleteOutfit(outfitId: number): Promise<Outfit> {
+  return request<Outfit>(`/api/outfits/${outfitId}`, { method: 'DELETE' })
+}

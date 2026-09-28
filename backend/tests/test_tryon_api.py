@@ -436,3 +436,44 @@ def test_list_outfits_is_empty_before_any_generation(ctx, tmp_path):
     seed_wardrobe(tmp_path / "test.db", tmp_path / "uploads")
 
     assert client.get("/api/outfits").json() == []
+
+
+# ---------- DELETE /api/outfits/{id} ----------
+
+def test_delete_outfit_removes_record_and_result_image(ctx, tmp_path):
+    """结果图是按 MB 计的，这条删除才是「结果图持续累积」的解药。
+    结果图在 uploads/tryon/ 子目录下，取文件名时不能把目录丢掉"""
+    client, state = ctx
+    seed_wardrobe(tmp_path / "test.db", tmp_path / "uploads")
+    outfit_id = post_tryon(client, clothes_ids=[1]).json()["id"]
+    result_dir = tmp_path / "uploads" / "tryon"
+    assert len(list(result_dir.iterdir())) == 1
+
+    response = client.delete(f"/api/outfits/{outfit_id}")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == outfit_id
+    assert response.json()["result_image_url"].startswith("/uploads/tryon/")
+    assert list(result_dir.iterdir()) == []
+    assert client.get("/api/outfits").json() == []
+
+
+def test_delete_outfit_404_for_unknown_id(ctx):
+    client, _ = ctx
+
+    response = client.delete("/api/outfits/999")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "试穿记录不存在"
+
+
+def test_delete_outfit_leaves_other_results_alone(ctx, tmp_path):
+    client, state = ctx
+    seed_wardrobe(tmp_path / "test.db", tmp_path / "uploads")
+    keep = post_tryon(client, clothes_ids=[1]).json()["id"]
+    drop = post_tryon(client, clothes_ids=[2]).json()["id"]
+
+    client.delete(f"/api/outfits/{drop}")
+
+    assert [row["id"] for row in client.get("/api/outfits").json()] == [keep]
+    assert len(list((tmp_path / "uploads" / "tryon").iterdir())) == 1

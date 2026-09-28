@@ -1,5 +1,5 @@
 """
-模特（全身照）管理 API：上传 / 列表 / 设为默认
+模特（全身照）管理 API：上传 / 列表 / 设为默认 / 删除
 
 模特照**不做抠图**：试穿时喂给图像编辑模型的是原图，抠图结果只用于衣柜卡片展示。
 """
@@ -13,12 +13,14 @@ from PIL import Image, UnidentifiedImageError
 from config import Settings, get_settings
 from storage.database import get_db
 from storage.model_store import (
+    delete_model,
     get_model,
     list_models,
     row_to_model,
     save_model,
     set_default_model,
 )
+from storage.uploads_store import delete_upload_files
 
 router = APIRouter()
 
@@ -70,3 +72,23 @@ async def set_default(
         raise HTTPException(status_code=404, detail="模特不存在")
 
     return row_to_model(await get_model(db, model_id))
+
+
+@router.delete("/api/models/{model_id}")
+async def model_delete(
+    model_id: int,
+    user_id: int = 1,
+    db: aiosqlite.Connection = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """删除模特照，返回被删的那一行。
+
+    删掉的若是默认模特，`delete_model` 会在同一个事务里把最新的一张提为默认 ——
+    前端拿到的「哪张是默认」始终以服务端为准，不自己猜。
+    """
+    row = await delete_model(db, user_id, model_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="模特不存在")
+
+    delete_upload_files(settings.upload_dir, [row["image_path"]])
+    return row_to_model(row)

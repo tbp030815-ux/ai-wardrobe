@@ -22,11 +22,13 @@ from storage.database import get_db
 from storage.model_store import get_default_model, get_model
 from storage.outfits_store import (
     DEFAULT_LIST_LIMIT,
+    delete_outfit,
     get_outfit,
     list_outfits,
     row_to_outfit,
     save_outfit,
 )
+from storage.uploads_store import delete_upload_files, resolve_upload_path
 
 router = APIRouter()
 
@@ -42,8 +44,15 @@ class TryOnRequest(BaseModel):
 
 
 def _upload_file(upload_dir: Path, image_path: str) -> Path:
-    """`/uploads/xxx.jpg` → `<upload_dir>/xxx.jpg`。取 `.name` 顺带挡掉路径穿越"""
-    return upload_dir / Path(image_path).name
+    """`/uploads/xxx.jpg` → `<upload_dir>/xxx.jpg`。
+
+    走 `resolve_upload_path` 而不是 `Path(image_path).name`：后者会把
+    `uploads/tryon/` 下的结果图错解到 uploads 根目录（子目录是真实存在的层级）。
+    """
+    path = resolve_upload_path(upload_dir, image_path)
+    if path is None:
+        raise HTTPException(status_code=500, detail="图片路径不合法，请重新上传")
+    return path
 
 
 def _read_image(path: Path, label: str) -> tuple[bytes, tuple[int, int]]:
@@ -175,3 +184,19 @@ async def outfits_list(
 ):
     rows = await list_outfits(db, user_id, limit)
     return [row_to_outfit(row) for row in rows]
+
+
+@router.delete("/api/outfits/{outfit_id}")
+async def outfit_delete(
+    outfit_id: int,
+    user_id: int = 1,
+    db: aiosqlite.Connection = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """删除一次试穿记录并删掉结果图 —— 结果图是按 MB 计的，这条路径才是累积的解药"""
+    row = await delete_outfit(db, user_id, outfit_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="试穿记录不存在")
+
+    delete_upload_files(settings.upload_dir, [row["result_image_url"]])
+    return row_to_outfit(row)
