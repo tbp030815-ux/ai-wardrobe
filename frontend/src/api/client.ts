@@ -1,6 +1,18 @@
-import type { Clothes, Model, Outfit, Recommendation, TryOnResult } from '../types'
+import type { AuthStatus, Clothes, Model, Outfit, Recommendation, TryOnResult } from '../types'
 
 const NETWORK_ERROR_MESSAGE = '无法连接后端服务，请确认后端已启动'
+
+/**
+ * 会话失效回调。由 App 注册，收到业务请求的 401 时调用（退回登录页）。
+ *
+ * 为什么不在这里直接跳转：client 层不该知道路由；而且登录接口自己的 401
+ * 是「密码错误」，不是会话过期，必须排除，否则登录页刚显示的错误会被冲掉。
+ */
+let unauthorizedHandler: (() => void) | null = null
+
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  unauthorizedHandler = handler
+}
 
 /** 把失败响应转成可读错误：优先用后端的 detail，否则用状态码兜底 */
 async function toError(response: Response): Promise<Error> {
@@ -20,8 +32,31 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   } catch {
     throw new Error(NETWORK_ERROR_MESSAGE)
   }
-  if (!response.ok) throw await toError(response)
+  if (!response.ok) {
+    if (response.status === 401 && !url.startsWith('/api/auth/')) unauthorizedHandler?.()
+    throw await toError(response)
+  }
   return response.json() as Promise<T>
+}
+
+/* ---------- 认证 ---------- */
+
+/** 登录。失败时抛出的 Error 里是后端文案（密码错误 / 未配置密码） */
+export async function login(password: string): Promise<void> {
+  await request<{ authenticated: boolean }>('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  })
+}
+
+export async function logout(): Promise<void> {
+  await request<{ authenticated: boolean }>('/api/auth/logout', { method: 'POST' })
+}
+
+/** 当前登录状态。未配置密码时也返 200（configured: false），登录页据此提前提示 */
+export async function fetchAuthStatus(): Promise<AuthStatus> {
+  return request<AuthStatus>('/api/auth/me')
 }
 
 export async function fetchWardrobe(): Promise<Clothes[]> {

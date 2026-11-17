@@ -4,12 +4,16 @@ import {
   deleteClothes,
   deleteModel,
   deleteOutfit,
+  fetchAuthStatus,
   fetchModels,
   fetchOutfits,
   fetchRecommendation,
   fetchWardrobe,
   generateTryOn,
+  login,
+  logout,
   setDefaultModel,
+  setUnauthorizedHandler,
   uploadClothes,
   uploadModel,
 } from './client'
@@ -44,6 +48,8 @@ const sampleClothes: Clothes = {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  // 未授权回调是模块级全局状态，不重置会跨用例泄漏
+  setUnauthorizedHandler(null)
 })
 
 describe('fetchWardrobe', () => {
@@ -339,5 +345,74 @@ describe('deleteOutfit', () => {
     stubFetch(async () => jsonResponse({ detail: '试穿记录不存在' }, 404))
 
     await expect(deleteOutfit(999)).rejects.toThrow('试穿记录不存在')
+  })
+})
+
+describe('认证', () => {
+  it('POSTs the password to /api/auth/login as JSON', async () => {
+    const spy = stubFetch(async () => jsonResponse({ authenticated: true }))
+
+    await login('hunter2')
+
+    const [url, init] = spy.mock.calls[0]
+    expect(url).toBe('/api/auth/login')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
+  })
+
+  it('surfaces the server message when the password is wrong', async () => {
+    stubFetch(async () => jsonResponse({ detail: '密码错误' }, 401))
+
+    await expect(login('wrong')).rejects.toThrow('密码错误')
+  })
+
+  it('does not treat a wrong password as an expired session', async () => {
+    // 登录失败的 401 不是「会话失效」：通知 handler 会把登录页刚显示的错误冲掉
+    const handler = vi.fn()
+    setUnauthorizedHandler(handler)
+    stubFetch(async () => jsonResponse({ detail: '密码错误' }, 401))
+
+    await expect(login('wrong')).rejects.toThrow('密码错误')
+
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('GETs the auth status from /api/auth/me', async () => {
+    const spy = stubFetch(async () => jsonResponse({ authenticated: false, configured: true }))
+
+    const status = await fetchAuthStatus()
+
+    expect(status).toEqual({ authenticated: false, configured: true })
+    expect(spy.mock.calls[0][0]).toBe('/api/auth/me')
+  })
+
+  it('POSTs to /api/auth/logout', async () => {
+    const spy = stubFetch(async () => jsonResponse({ authenticated: false }))
+
+    await logout()
+
+    expect(spy.mock.calls[0][0]).toBe('/api/auth/logout')
+    expect(spy.mock.calls[0][1]?.method).toBe('POST')
+  })
+
+  it('notifies the app and still throws when a business request is rejected', async () => {
+    // 会话过期 / 密码被改：任何业务请求的 401 都该把用户送回登录页，但错误本身不能吞掉
+    const handler = vi.fn()
+    setUnauthorizedHandler(handler)
+    stubFetch(async () => jsonResponse({ detail: '请先登录' }, 401))
+
+    await expect(fetchWardrobe()).rejects.toThrow('请先登录')
+
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not notify the handler for non-auth failures', async () => {
+    const handler = vi.fn()
+    setUnauthorizedHandler(handler)
+    stubFetch(async () => jsonResponse({ detail: '数据库错误' }, 500))
+
+    await expect(fetchWardrobe()).rejects.toThrow('数据库错误')
+
+    expect(handler).not.toHaveBeenCalled()
   })
 })

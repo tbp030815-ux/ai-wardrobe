@@ -42,7 +42,7 @@ async def save_sample(db, *, user_id=1, clothes_ids=(3, 4), model_id=1):
 async def test_save_and_get_outfit(db):
     outfit_id = await save_sample(db)
 
-    row = await get_outfit(db, outfit_id)
+    row = await get_outfit(db, outfit_id, user_id=1)
 
     assert row["user_id"] == 1
     assert row["model_id"] == 1
@@ -51,14 +51,22 @@ async def test_save_and_get_outfit(db):
 
 
 async def test_get_outfit_returns_none_for_unknown_id(db):
-    assert await get_outfit(db, 999) is None
+    assert await get_outfit(db, 999, user_id=1) is None
+
+
+async def test_get_outfit_is_scoped_to_user(db):
+    """单行读取漏掉 user_id 时，知道 id 就能读到别人的试穿记录"""
+    theirs = await save_sample(db, user_id=2)
+
+    assert await get_outfit(db, theirs, user_id=1) is None
+    assert await get_outfit(db, theirs, user_id=2) is not None
 
 
 async def test_clothes_ids_round_trip_as_json_text(db):
     """表里是 TEXT 列，存进去必须是 JSON 字符串"""
     outfit_id = await save_sample(db, clothes_ids=(3, 7, 12))
 
-    row = await get_outfit(db, outfit_id)
+    row = await get_outfit(db, outfit_id, user_id=1)
 
     assert json.loads(row["clothes_ids"]) == [3, 7, 12]
 
@@ -66,7 +74,7 @@ async def test_clothes_ids_round_trip_as_json_text(db):
 async def test_row_to_outfit_returns_clothes_ids_as_list(db):
     outfit_id = await save_sample(db, clothes_ids=(3, 7))
 
-    payload = row_to_outfit(await get_outfit(db, outfit_id))
+    payload = row_to_outfit(await get_outfit(db, outfit_id, user_id=1))
 
     assert payload["clothes_ids"] == [3, 7]
     assert payload["id"] == outfit_id
@@ -79,7 +87,7 @@ async def test_row_to_outfit_treats_null_clothes_ids_as_empty_list(db):
     )
     await db.commit()
 
-    payload = row_to_outfit(await get_outfit(db, 1))
+    payload = row_to_outfit(await get_outfit(db, 1, user_id=1))
 
     assert payload["clothes_ids"] == []
 
@@ -90,7 +98,7 @@ async def test_row_to_outfit_survives_broken_json(db):
     )
     await db.commit()
 
-    payload = row_to_outfit(await get_outfit(db, 1))
+    payload = row_to_outfit(await get_outfit(db, 1, user_id=1))
 
     assert payload["clothes_ids"] == []
 
@@ -130,7 +138,7 @@ async def test_delete_outfit_removes_the_row_and_returns_it(db):
     deleted = await delete_outfit(db, 1, outfit_id)
 
     assert deleted["result_image_url"] == "/uploads/tryon/abc.jpg"
-    assert await get_outfit(db, outfit_id) is None
+    assert await get_outfit(db, outfit_id, user_id=1) is None
 
 
 async def test_delete_outfit_returns_none_for_unknown_id(db):
@@ -141,7 +149,7 @@ async def test_delete_outfit_is_scoped_to_user(db):
     theirs = await save_sample(db, user_id=2)
 
     assert await delete_outfit(db, 1, theirs) is None
-    assert await get_outfit(db, theirs) is not None
+    assert await get_outfit(db, theirs, user_id=2) is not None
 
 
 async def test_delete_outfit_leaves_other_rows_alone(db):

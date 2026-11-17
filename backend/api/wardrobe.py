@@ -4,6 +4,7 @@
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
 
+from api.auth import current_user_id
 from config import Settings, get_settings
 from services.garment_roles import CATEGORY_ROLE
 from storage.clothes_store import delete_clothes, get_clothes, list_clothes
@@ -15,7 +16,7 @@ router = APIRouter()
 
 @router.get("/api/wardrobe")
 async def wardrobe_list(
-    user_id: int = 1,
+    user_id: int = Depends(current_user_id),
     db: aiosqlite.Connection = Depends(get_db),
 ):
     rows = await list_clothes(db, user_id)
@@ -29,9 +30,10 @@ async def wardrobe_list(
 @router.get("/api/clothes/{clothes_id}")
 async def clothes_detail(
     clothes_id: int,
+    user_id: int = Depends(current_user_id),
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    row = await get_clothes(db, clothes_id)
+    row = await get_clothes(db, clothes_id, user_id=user_id)
     if row is None:
         raise HTTPException(status_code=404, detail="衣物不存在")
     return dict(row)
@@ -40,7 +42,7 @@ async def clothes_detail(
 @router.delete("/api/clothes/{clothes_id}")
 async def clothes_delete(
     clothes_id: int,
-    user_id: int = 1,
+    user_id: int = Depends(current_user_id),
     db: aiosqlite.Connection = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):

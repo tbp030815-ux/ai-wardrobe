@@ -9,13 +9,11 @@ import asyncio
 import aiosqlite
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 
-from config import Settings
 from main import app
 from services.weather import CityNotFoundError, Weather
 from storage.clothes_store import save_clothes
-from storage.database import create_tables, get_db
+from tests.conftest import login, make_client
 
 
 def make_weather(city="上海"):
@@ -33,30 +31,6 @@ def make_weather(city="上海"):
 
 @pytest.fixture
 def ctx(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-
-    async def setup_db():
-        async with aiosqlite.connect(str(db_path)) as conn:
-            await create_tables(conn)
-
-    asyncio.run(setup_db())
-
-    async def override_db():
-        async with aiosqlite.connect(str(db_path)) as conn:
-            conn.row_factory = aiosqlite.Row
-            yield conn
-
-    test_settings = Settings(
-        api_key="test-key",
-        vision_model="test-vision-model",
-        image_model="test-image-model",
-        base_url="https://test.example.com/api/v3",
-        upload_dir=tmp_path / "uploads",
-    )
-
-    app.dependency_overrides[get_db] = override_db
-    app.dependency_overrides[__import__("config").get_settings] = lambda: test_settings
-
     async def fake_chat(*args, **kwargs):
         raise ValueError("LLM disabled in API tests")
 
@@ -72,11 +46,12 @@ def ctx(tmp_path, monkeypatch):
 
     monkeypatch.setattr("api.recommendation.get_weather", fake_get_weather)
 
-    with TestClient(app) as c:
-        yield c, state
-    # 注意：fixture 返回 (client, state) 元组，测试里用 ctx 接收后解包
-
-    app.dependency_overrides.clear()
+    with make_client(tmp_path) as c:
+        try:
+            assert login(c).status_code == 200
+            yield c, state
+        finally:
+            app.dependency_overrides.clear()
 
 
 def seed_clothes(db_path, items):

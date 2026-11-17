@@ -22,7 +22,7 @@ async def test_save_and_get_clothes(db):
     clothes_id = await save_clothes(
         db, user_id=1, image_path="uploads/a.jpg", cropped_path="uploads/a.png"
     )
-    row = await get_clothes(db, clothes_id)
+    row = await get_clothes(db, clothes_id, user_id=1)
 
     assert row["user_id"] == 1
     assert row["image_path"] == "uploads/a.jpg"
@@ -42,7 +42,7 @@ async def test_save_clothes_with_semantics(db):
         style="休闲",
         season="夏季",
     )
-    row = await get_clothes(db, clothes_id)
+    row = await get_clothes(db, clothes_id, user_id=1)
 
     assert row["category"] == "上衣"
     assert row["sub_category"] == "T恤"
@@ -73,8 +73,16 @@ async def test_list_clothes_only_returns_own_user(db):
 
 
 async def test_get_clothes_returns_none_when_missing(db):
-    row = await get_clothes(db, 999)
+    row = await get_clothes(db, 999, user_id=1)
     assert row is None
+
+
+async def test_get_clothes_is_scoped_to_user(db):
+    """单行读取漏掉 user_id 时，知道 id 就能读到别人的衣物"""
+    theirs = await save_clothes(db, user_id=2, image_path="uploads/b.jpg")
+
+    assert await get_clothes(db, theirs, user_id=1) is None
+    assert await get_clothes(db, theirs, user_id=2) is not None
 
 
 # ---------- delete_clothes ----------
@@ -90,7 +98,7 @@ async def test_delete_clothes_removes_the_row_and_returns_it(db):
 
     assert deleted["image_path"] == "/uploads/a.jpg"
     assert deleted["cropped_path"] == "/uploads/a_cropped.png"
-    assert await get_clothes(db, clothes_id) is None
+    assert await get_clothes(db, clothes_id, user_id=1) is None
 
 
 async def test_delete_clothes_returns_none_for_unknown_id(db):
@@ -102,7 +110,7 @@ async def test_delete_clothes_is_scoped_to_user(db):
     theirs = await save_clothes(db, user_id=2, image_path="/uploads/b.jpg")
 
     assert await delete_clothes(db, 1, theirs) is None
-    assert await get_clothes(db, theirs) is not None
+    assert await get_clothes(db, theirs, user_id=2) is not None
 
 
 async def test_delete_clothes_leaves_other_rows_alone(db):

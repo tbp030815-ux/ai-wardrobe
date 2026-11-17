@@ -35,9 +35,17 @@ async def save_outfit(
     return cursor.lastrowid
 
 
-async def get_outfit(db: aiosqlite.Connection, outfit_id: int) -> aiosqlite.Row | None:
-    """按 id 查询穿搭记录，不存在返回 None"""
-    cursor = await db.execute("SELECT * FROM outfits WHERE id = ?", (outfit_id,))
+async def get_outfit(
+    db: aiosqlite.Connection, outfit_id: int, *, user_id: int
+) -> aiosqlite.Row | None:
+    """按 id 查询**该用户的**穿搭记录，不存在或不属于该用户时返回 None。
+
+    `user_id` 是必填关键字参数、没有默认值：漏改的调用点会直接 TypeError，
+    而不是悄悄退回一条不过滤归属的查询。
+    """
+    cursor = await db.execute(
+        "SELECT * FROM outfits WHERE id = ? AND user_id = ?", (outfit_id, user_id)
+    )
     return await cursor.fetchone()
 
 

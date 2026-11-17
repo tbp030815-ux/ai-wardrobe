@@ -1,7 +1,7 @@
 """
 上传文件路径解析与删除测试
 
-`/uploads/` 前缀是 URL 约定（main.py 挂载的 StaticFiles 根），
+`/uploads/` 前缀是 URL 约定（main.py 的鉴权图片路由根），
 `resolve_upload_path` 是它到磁盘路径的唯一映射。
 
 **别用 `Path(url).name` 代替它**：试穿结果存在 `uploads/tryon/` 子目录下，

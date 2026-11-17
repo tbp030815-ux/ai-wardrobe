@@ -29,14 +29,22 @@ async def db():
 async def test_save_and_get_model(db):
     model_id = await save_model(db, user_id=1, image_path="/uploads/m.jpg")
 
-    row = await get_model(db, model_id)
+    row = await get_model(db, model_id, user_id=1)
 
     assert row["user_id"] == 1
     assert row["image_path"] == "/uploads/m.jpg"
 
 
 async def test_get_model_returns_none_for_unknown_id(db):
-    assert await get_model(db, 999) is None
+    assert await get_model(db, 999, user_id=1) is None
+
+
+async def test_get_model_is_scoped_to_user(db):
+    """单行读取漏掉 user_id 时，知道 id 就能读到别人的模特"""
+    theirs = await save_model(db, user_id=2, image_path="/uploads/b.jpg")
+
+    assert await get_model(db, theirs, user_id=1) is None
+    assert await get_model(db, theirs, user_id=2) is not None
 
 
 async def test_first_model_becomes_default_automatically(db):
@@ -83,7 +91,7 @@ async def test_set_default_is_exclusive(db):
     assert await set_default_model(db, 1, second) is True
 
     assert (await get_default_model(db, 1))["id"] == second
-    assert (await get_model(db, first))["is_default"] == 0
+    assert (await get_model(db, first, user_id=1))["is_default"] == 0
 
 
 async def test_set_default_returns_false_for_unknown_id(db):
@@ -143,7 +151,7 @@ async def test_row_to_model_converts_is_default_to_real_bool(db):
     """SQLite 存的是 INTEGER：直接扔给前端会变成 1/0 而不是 true/false"""
     model_id = await save_model(db, user_id=1, image_path="/uploads/a.jpg")
 
-    payload = row_to_model(await get_model(db, model_id))
+    payload = row_to_model(await get_model(db, model_id, user_id=1))
 
     assert payload["is_default"] is True
 
@@ -152,7 +160,7 @@ async def test_row_to_model_keeps_false_as_bool(db):
     await save_model(db, user_id=1, image_path="/uploads/a.jpg")
     second = await save_model(db, user_id=1, image_path="/uploads/b.jpg")
 
-    payload = row_to_model(await get_model(db, second))
+    payload = row_to_model(await get_model(db, second, user_id=1))
 
     assert payload["is_default"] is False
 
@@ -166,7 +174,7 @@ async def test_delete_model_removes_the_row_and_returns_it(db):
     deleted = await delete_model(db, 1, model_id)
 
     assert deleted["image_path"] == "/uploads/a.jpg"
-    assert await get_model(db, model_id) is None
+    assert await get_model(db, model_id, user_id=1) is None
 
 
 async def test_delete_model_returns_none_for_unknown_id(db):
@@ -177,7 +185,7 @@ async def test_delete_model_is_scoped_to_user(db):
     theirs = await save_model(db, user_id=2, image_path="/uploads/b.jpg")
 
     assert await delete_model(db, 1, theirs) is None
-    assert await get_model(db, theirs) is not None
+    assert await get_model(db, theirs, user_id=2) is not None
 
 
 async def test_deleting_the_default_promotes_the_newest_remaining(db):
@@ -189,7 +197,7 @@ async def test_deleting_the_default_promotes_the_newest_remaining(db):
     await delete_model(db, 1, first)  # first 是自动成为默认的那张
 
     assert (await get_default_model(db, 1))["id"] == second
-    assert (await get_model(db, second))["is_default"] == 1
+    assert (await get_model(db, second, user_id=1))["is_default"] == 1
 
 
 async def test_deleting_a_non_default_leaves_the_default_alone(db):

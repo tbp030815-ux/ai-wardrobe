@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel
 
+from api.auth import current_user_id
 from config import Settings, get_settings
 from services.seedream_client import UpstreamError, guess_mime
 from services.tryon import build_tryon, is_low_resolution
@@ -69,14 +70,14 @@ def _read_image(path: Path, label: str) -> tuple[bytes, tuple[int, int]]:
 
 
 def _result_extension(result: bytes) -> str:
-    """扩展名取自**内容**：上游返回 JPEG 却存成 .png 时，StaticFiles 会照扩展名发 Content-Type"""
+    """扩展名取自**内容**：上游返回 JPEG 却存成 .png 时，响应会照扩展名发 Content-Type"""
     return _EXTENSIONS.get(guess_mime(result), ".jpg")
 
 
 @router.post("/api/tryon")
 async def generate_tryon(
     payload: TryOnRequest,
-    user_id: int = 1,
+    user_id: int = Depends(current_user_id),
     db: aiosqlite.Connection = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -96,7 +97,7 @@ async def generate_tryon(
     # 调上游要 30-60s，所有读操作都在它之前做完，中间不持有写事务
     garments, missing = [], []
     for clothes_id in clothes_ids:
-        row = await get_clothes(db, clothes_id)
+        row = await get_clothes(db, clothes_id, user_id=user_id)
         (garments if row is not None else missing).append(row or clothes_id)
     if missing:
         raise HTTPException(status_code=404, detail=f"衣物不存在：{missing}")
@@ -106,7 +107,7 @@ async def generate_tryon(
         if model_row is None:
             raise HTTPException(status_code=400, detail="请先上传一张模特全身照")
     else:
-        model_row = await get_model(db, payload.model_id)
+        model_row = await get_model(db, payload.model_id, user_id=user_id)
         if model_row is None:
             raise HTTPException(status_code=404, detail="模特不存在")
 
@@ -173,12 +174,15 @@ async def generate_tryon(
         result_image_url=f"/uploads/tryon/{name}",
     )
     # warnings 只出参、不落库：它描述的是这次输入的质量，不是这张图的性质
-    return {**row_to_outfit(await get_outfit(db, outfit_id)), "warnings": warnings}
+    return {
+        **row_to_outfit(await get_outfit(db, outfit_id, user_id=user_id)),
+        "warnings": warnings,
+    }
 
 
 @router.get("/api/outfits")
 async def outfits_list(
-    user_id: int = 1,
+    user_id: int = Depends(current_user_id),
     limit: int = DEFAULT_LIST_LIMIT,
     db: aiosqlite.Connection = Depends(get_db),
 ):
@@ -189,7 +193,7 @@ async def outfits_list(
 @router.delete("/api/outfits/{outfit_id}")
 async def outfit_delete(
     outfit_id: int,
-    user_id: int = 1,
+    user_id: int = Depends(current_user_id),
     db: aiosqlite.Connection = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):

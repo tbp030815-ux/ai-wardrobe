@@ -4,17 +4,13 @@
 模特照不需要抠图（试穿直接喂原图），所以这里没有外部 AI 依赖，
 被测的是上传落盘、默认模特的记账、以及出参的类型。
 """
-import asyncio
 import io
 
-import aiosqlite
 import pytest
-from fastapi.testclient import TestClient
 from PIL import Image
 
-from config import Settings
 from main import app
-from storage.database import create_tables, get_db
+from tests.conftest import login, make_client
 
 
 def make_jpeg_bytes() -> bytes:
@@ -25,36 +21,12 @@ def make_jpeg_bytes() -> bytes:
 
 @pytest.fixture
 def client(tmp_path):
-    db_path = tmp_path / "test.db"
-    upload_dir = tmp_path / "uploads"
-    upload_dir.mkdir()
-
-    async def setup_db():
-        async with aiosqlite.connect(str(db_path)) as conn:
-            await create_tables(conn)
-
-    asyncio.run(setup_db())
-
-    async def override_db():
-        async with aiosqlite.connect(str(db_path)) as conn:
-            conn.row_factory = aiosqlite.Row
-            yield conn
-
-    test_settings = Settings(
-        api_key="test-key",
-        vision_model="test-vision-model",
-        image_model="test-image-model",
-        base_url="https://test.example.com/api/v3",
-        upload_dir=upload_dir,
-    )
-
-    app.dependency_overrides[get_db] = override_db
-    app.dependency_overrides[__import__("config").get_settings] = lambda: test_settings
-
-    with TestClient(app) as c:
-        yield c
-
-    app.dependency_overrides.clear()
+    with make_client(tmp_path) as c:
+        try:
+            assert login(c).status_code == 200
+            yield c
+        finally:
+            app.dependency_overrides.clear()
 
 
 def upload(client, name="model.jpg"):

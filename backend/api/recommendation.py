@@ -9,6 +9,7 @@ import aiosqlite
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
+from api.auth import current_user_id
 from config import Settings, get_settings
 from services.recommendation import DEFAULT_OCCASION, SUPPORTED_OCCASIONS, build_recommendation
 from services.weather import CityNotFoundError, get_weather
@@ -22,7 +23,7 @@ router = APIRouter()
 async def recommendation(
     location: str = "上海",
     occasion: str = DEFAULT_OCCASION,
-    user_id: int = 1,
+    user_id: int = Depends(current_user_id),
     db: aiosqlite.Connection = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):

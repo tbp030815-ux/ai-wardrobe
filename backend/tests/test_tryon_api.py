@@ -13,15 +13,13 @@ import json
 
 import aiosqlite
 import pytest
-from fastapi.testclient import TestClient
 from PIL import Image
 
-from config import Settings
 from main import app
 from services.seedream_client import UpstreamError
 from storage.clothes_store import save_clothes
-from storage.database import create_tables, get_db
 from storage.model_store import save_model
+from tests.conftest import login, make_client
 
 def make_image(width: int, height: int, color, fmt: str = "JPEG") -> bytes:
     buf = io.BytesIO()
@@ -35,32 +33,6 @@ MODEL_PHOTO_BYTES = make_image(300, 400, (240, 230, 220))
 
 @pytest.fixture
 def ctx(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-    upload_dir = tmp_path / "uploads"
-    upload_dir.mkdir()
-
-    async def setup_db():
-        async with aiosqlite.connect(str(db_path)) as conn:
-            await create_tables(conn)
-
-    asyncio.run(setup_db())
-
-    async def override_db():
-        async with aiosqlite.connect(str(db_path)) as conn:
-            conn.row_factory = aiosqlite.Row
-            yield conn
-
-    test_settings = Settings(
-        api_key="test-key",
-        vision_model="test-vision-model",
-        image_model="test-image-model",
-        base_url="https://test.example.com/api/v3",
-        upload_dir=upload_dir,
-    )
-
-    app.dependency_overrides[get_db] = override_db
-    app.dependency_overrides[__import__("config").get_settings] = lambda: test_settings
-
     state = {
         "calls": [],
         "result": make_image(90, 120, (10, 20, 30), fmt="JPEG"),
@@ -77,10 +49,12 @@ def ctx(tmp_path, monkeypatch):
 
     monkeypatch.setattr("api.tryon.build_tryon", fake_build_tryon)
 
-    with TestClient(app) as c:
-        yield c, state
-
-    app.dependency_overrides.clear()
+    with make_client(tmp_path) as c:
+        try:
+            assert login(c).status_code == 200
+            yield c, state
+        finally:
+            app.dependency_overrides.clear()
 
 
 def seed(db_path, upload_dir, items, models=("/uploads/m1.jpg",)):
@@ -305,7 +279,7 @@ def test_tryon_saves_result_image_on_disk(ctx, tmp_path):
 
 
 def test_tryon_result_url_extension_follows_content_type(ctx, tmp_path):
-    """上游返回 JPEG 却存成 .png 时，StaticFiles 会照扩展名发 image/png"""
+    """上游返回 JPEG 却存成 .png 时，响应会照扩展名发 image/png"""
     client, state = ctx
     seed_wardrobe(tmp_path / "test.db", tmp_path / "uploads")
     state["result"] = make_image(90, 120, (10, 20, 30), fmt="JPEG")

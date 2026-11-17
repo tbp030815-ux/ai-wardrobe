@@ -8,6 +8,7 @@ import aiosqlite
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
+from api.auth import current_user_id
 from config import Settings, get_settings
 from services.background_removal import remove_background
 from services.seedream_client import analyze_clothes
@@ -20,6 +21,7 @@ router = APIRouter()
 @router.post("/api/upload")
 async def upload_clothes(
     file: UploadFile = File(...),
+    user_id: int = Depends(current_user_id),
     db: aiosqlite.Connection = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -58,7 +60,7 @@ async def upload_clothes(
     # 4. 入库
     clothes_id = await save_clothes(
         db,
-        user_id=1,  # 单用户模式，用户系统后续再加
+        user_id=user_id,
         image_path=f"/uploads/{image_file.name}",
         cropped_path=f"/uploads/{cropped_file.name}",
         category=semantics.get("category"),
@@ -68,5 +70,5 @@ async def upload_clothes(
         season=semantics.get("season"),
     )
 
-    row = await get_clothes(db, clothes_id)
+    row = await get_clothes(db, clothes_id, user_id=user_id)
     return dict(row)

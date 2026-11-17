@@ -1,13 +1,13 @@
 """
 上传文件（`backend/uploads/`）的磁盘侧操作
 
-`/uploads/` 前缀是 URL 约定（main.py 挂载的 StaticFiles 根），这里负责它到磁盘
+`/uploads/` 前缀是 URL 约定（main.py 的鉴权图片路由根），这里负责它到磁盘
 路径的映射与删除；数据库侧的增删查在同目录的 `*_store.py` 里。
 """
 from collections.abc import Iterable
 from pathlib import Path
 
-# main.py 的 StaticFiles 挂载点，改动必须同步
+# main.py 的 `/uploads` 路由前缀，改动必须同步
 UPLOAD_URL_PREFIX = "/uploads/"
 
 

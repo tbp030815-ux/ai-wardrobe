@@ -86,3 +86,10 @@ export interface Recommendation {
   /** 缺失提示，如「衣柜里还没有鞋」；为空数组表示不缺 */
   gaps: string[]
 }
+
+/** 登录状态（对应 GET /api/auth/me） */
+export interface AuthStatus {
+  authenticated: boolean
+  /** 后端是否已配置访问密码；false 时登录页展示设置指引 */
+  configured: boolean
+}
