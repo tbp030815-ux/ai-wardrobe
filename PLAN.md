@@ -379,10 +379,13 @@ mask（mask 外像素原样拷回）、pose 条件分支、garment 编码器。�
 
 ### 阶段五：完善与优化（Day 15-18）
 
-- 用户认证系统（登录/注册）
-- 季节模式筛选
-- Docker 容器化部署
-- 国际化（中英双语）
+- [x] 单用户登录认证（密码哈希存 `.env`、HMAC 会话 cookie、全 API 与 `/uploads` 鉴权、`set_password.py`）
+- [ ] 季节模式筛选
+- [ ] Docker 容器化部署
+- [ ] 国际化（中英双语）
+
+> 认证范围刻意收窄：不做注册/多用户账号体系，身份固定为 `user_id=1`；
+> 登录失败限流是进程内的（多 worker 部署时各算各的）。
 
 ---
 
@@ -413,18 +416,22 @@ mask（mask 外像素原样拷回）、pose 条件分支、garment 编码器。�
 
 ## 九、环境变量 (.env)
 
+以 `backend/.env.example` 为准：
+
 ```bash
-# 火山引擎 Seedream API
-SEEDREAM_API_KEY=your_api_key_here
-SEEDREAM_MODEL=doubao-seedream-5.0-lite
-SEEDREAM_BASE_URL=https://api.volcengine.com/v1
+# 火山方舟 (Volcano Ark)
+SEEDREAM_API_KEY=
+SEEDREAM_VISION_MODEL=doubao-seed-2-1-lite-260915
+SEEDREAM_IMAGE_MODEL=doubao-seedream-4-0-250828
+ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
 
-# 数据库
-DATABASE_URL=./data/wardrobe.db
-
-# 上传目录
-UPLOAD_DIR=./uploads
+# 登录认证（APP_PASSWORD_HASH 由 scripts/set_password.py 生成）
+APP_PASSWORD_HASH=
+APP_COOKIE_SECURE=false
 ```
+
+数据库路径（`backend/data/wardrobe.db`）与上传目录（`backend/uploads/`）是代码内约定，
+不通过环境变量配置。
 
 ---
 

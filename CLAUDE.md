@@ -17,7 +17,7 @@ AI 智能衣橱 — 用户上传衣物照片，通过 AI 自动抠图入库、�
 
 ## 环境
 
-- **Python**: 必须用 `C:\Users\tianbaoping\AppData\Local\Programs\Python\Python310\python.exe`（系统默认 python 是 3.7，太旧无法装 FastAPI）
+- **Python**: 3.10（系统默认 python 可能是 3.7，太旧无法装 FastAPI，需显式使用 3.10 解释器）
 - **虚拟环境**: `backend/venv/`
 - **rembg 模型**: `~/.u2net/u2net.onnx`（168MB）。GitHub 直连下载只有 ~12KB/s，用国内镜像：
   ```bash
@@ -47,9 +47,10 @@ cd frontend && npm test
 
 ```
 backend/
-├── main.py                    # FastAPI 入口，挂载 /uploads 静态目录
+├── main.py                    # FastAPI 入口 + 鉴权后的 /uploads 图片路由
 ├── config.py                  # Settings（读 .env）
 ├── api/
+│   ├── auth.py                # POST /api/auth/login|logout, GET /api/auth/me, 会话依赖
 │   ├── upload.py              # POST /api/upload（抠图 → 识别 → 入库）
 │   ├── wardrobe.py            # GET /api/wardrobe, GET /api/clothes/{id}, DELETE /api/clothes/{id}
 │   ├── recommendation.py      # GET /api/recommendation（天气 + 穿搭推荐）
@@ -68,6 +69,13 @@ backend/
 │   ├── model_store.py         # 模特数据访问（is_default 记账）
 │   ├── outfits_store.py       # 试穿记录（clothes_ids JSON 的读写）
 │   └── uploads_store.py       # /uploads URL → 磁盘路径 + 尽力删除文件
+├── security/
+│   ├── password.py            # pbkdf2_sha256 哈希/校验（迭代数写在哈希串里）
+│   ├── session.py             # HMAC 签名的会话 cookie（密钥派生自 password_hash）
+│   ├── rate_limit.py          # 登录失败限流（进程内，5 次 / 5 分钟）
+│   └── env_file.py            # .env 单行更新（set_password 脚本用）
+├── scripts/
+│   └── set_password.py        # 设置/重置登录密码（写入 .env 的 APP_PASSWORD_HASH）
 ├── tests/                     # pytest
 ├── uploads/                   # 上传图片存储（uploads/tryon/ 存生成结果）
 ├── requirements.txt           # 运行时依赖
@@ -78,7 +86,7 @@ frontend/
 ├── src/api/client.ts          # fetch 封装
 ├── src/pages/                 # Home / Wardrobe / TryOn（三个页面均已对接后端）
 ├── src/components/            # WardrobeGrid（可选选中模式 + 只读模式下的删除按钮）
-├── src/utils/                 # tryonIds.ts / variants.ts（纯函数，重点单测）
+├── src/utils/                 # tryonIds.ts / variants.ts / nextUrl.ts（纯函数，重点单测）
 └── vite.config.ts             # 代理 /api + /uploads
 PLAN.md                        # 完整技术方案（开发计划、API 设计、数据库表）
 ```
@@ -110,15 +118,33 @@ PLAN.md                        # 完整技术方案（开发计划、API 设计�
 | `SEEDREAM_VISION_MODEL` | 衣物识别模型，当前为 `doubao-seed-2-1-lite-260915`（旧版 `doubao-seed-1-6-vision-250815` 已下线，调用会返回 `InvalidEndpointOrModel.NotFound`） |
 | `SEEDREAM_IMAGE_MODEL` | 图像生成/编辑模型（阶段四 AI 试穿），当前为 `doubao-seedream-4-0-250828`，写进 `outfits.generated_by` |
 | `ARK_BASE_URL` | 火山方舟地址 `https://ark.cn-beijing.volces.com/api/v3` |
+| `APP_PASSWORD_HASH` | 登录密码的 PBKDF2 哈希。**用 `scripts/set_password.py` 生成，不要手写**。留空时登录 503，所有业务 API 都进不去 |
+| `APP_COOKIE_SECURE` | 会话 cookie 的 Secure 标记。仅 HTTPS 部署时设 `true`；http 下设 true 会「登录成功但立刻未登录」 |
 
 ## 部署
 
 - Docker Compose 部署待实现（计划阶段五）
 
+## 认证（阶段五）
+
+```
+POST /api/auth/login    {"password": "..."}   → 200 + Set-Cookie（错误密码 401，未配密码 503，连续失败 429）
+POST /api/auth/logout                          → 200，总是清 cookie
+GET  /api/auth/me                              → {"authenticated": bool, "configured": bool}，永远 200
+```
+
+- 单用户：身份固定为 `user_id=1`。密码哈希存 `APP_PASSWORD_HASH`，用 `scripts/set_password.py` 生成
+- 会话 cookie `wardrobe_session`：HMAC 签名，HttpOnly + SameSite=Strict，默认 30 天；签名密钥**派生自 password_hash** → 改密码让所有旧 cookie 立即失效
+- **除 `/`、`/health`、`/api/auth/*` 外，所有 API 与 `/uploads/{path}` 都要求有效会话**，否则 401「请先登录」
+- `/uploads` 不再是 `StaticFiles`：改为带 `current_user_id` 依赖的 `FileResponse` 路由，路径走 `resolve_upload_path`（挡穿越、保留 `tryon/` 子目录），响应 `Cache-Control: private`
+- 未登录在**地址栏**打开图片 URL 时 302 到 `/?next=<原路径>`（App 门禁显示登录页）；登录成功后前端**校验同源**再整页跳回原图（不校验就是开放重定向，见 `src/utils/nextUrl.ts`）；`<img>` 请求仍返回 401 JSON —— 靠 `Accept` 是否含 `text/html` 区分，写个全局 `HTTPException` 处理器分流
+- 所有查询/删除都带 `user_id`；单行 getter 的 `user_id` 是**必填关键字参数**，漏传直接 `TypeError`
+- 登录失败限流是**进程内**的：多 worker 部署时每个进程各算各的；重启清零
+
 ## 穿搭推荐接口（阶段三）
 
 ```
-GET /api/recommendation?location=上海&occasion=休闲&user_id=1
+GET /api/recommendation?location=上海&occasion=休闲
 ```
 
 | 情况 | 行为 |
@@ -198,6 +224,7 @@ DELETE /api/outfits/{id}    → Outfit     # 结果图（在 uploads/tryon/ 下�
 - ✅ 阶段三：穿搭推荐（Open-Meteo 天气 + 规则/LLM 混合推荐 + 前端今日推荐页），后端 100 / 前端 25 测试全绿，真实端到端联调通过
 - ✅ 阶段四：AI 试穿（模特管理 + 自由勾选多件 + 对比生成 + 历史记录 + 推荐页「试穿这套」联动），后端 241 / 前端 117 测试全绿。手工端到端 7 步联调已跑完（约 ¥1.8）。**已知限制：遮挡导致手臂漂、参考图水印偶发传染、输出抖动**，见上文
 - ✅ 阶段四补：三类删除端点（衣物 / 模特 / 试穿结果）+ 前端二次确认，见上文「删除接口」
-- ⏳ 阶段五：用户认证、Docker 部署、国际化
+- ✅ 阶段五（认证门禁）：单用户密码登录（pbkdf2 + HMAC cookie）、全部业务 API 与 `/uploads` 鉴权、`set_password.py`，后端 367 / 前端 146 测试全绿
+- ⏳ 阶段五待办：Docker Compose 部署、国际化
 - ⏳ **阶段四待办**：503 文案把上游 401 JSON 原样吐给用户（含 request id）；衣物上传处缺「建议用自己拍的照片，购物 App 下载的图常带水印」提示；模特体型识别（`height_cm` / `body_type` 仍为 NULL）；浏览器内验证（第 6 步）；删除功能的真机验证
 - 完整路线图见 `PLAN.md`
