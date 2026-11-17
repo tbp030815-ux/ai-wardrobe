@@ -6,3 +6,8 @@ __pycache__/
 uploads/
 data/
 venv/
+.pytest_cache/
+
+# 本机工具配置（技能包、权限白名单）与个人文件，不随仓库发布
+.claude/
+*.pdf
